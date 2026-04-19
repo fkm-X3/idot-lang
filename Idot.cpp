@@ -2,11 +2,13 @@
 //
 
 #include "Idot.h"
+#include <iostream>	
 
 using namespace std;
 
 int main()
 {
-	cout << "Hello CMake." << endl;
+	std::cout << "Hello World!";
 	return 0;
 }
+
