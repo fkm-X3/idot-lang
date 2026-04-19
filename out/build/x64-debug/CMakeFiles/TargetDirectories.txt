@@ -1,3 +1,0 @@
-C:/Users/Fkm/Documents/GitHub/Idot/out/build/x64-debug/CMakeFiles/Idot.dir
-C:/Users/Fkm/Documents/GitHub/Idot/out/build/x64-debug/CMakeFiles/edit_cache.dir
-C:/Users/Fkm/Documents/GitHub/Idot/out/build/x64-debug/CMakeFiles/rebuild_cache.dir
