@@ -40,13 +40,13 @@ big
 ### Configure
 
 ```powershell
-cmake -S . -B out\build\vs-debug -G "Visual Studio 17 2022" -A x64
+cmake --preset x64-debug
 ```
 
 ### Build
 
 ```powershell
-cmake --build out\build\vs-debug --config Debug
+cmake --build --preset x64-debug
 ```
 
 ## Run
@@ -54,19 +54,27 @@ cmake --build out\build\vs-debug --config Debug
 ### Run a file
 
 ```powershell
-.\out\build\vs-debug\Debug\Idot.exe .\examples\sample.idot
+.\out\build\x64-debug\Debug\Idot.exe .\examples\sample.idot
 ```
 
 ### Run REPL
 
 ```powershell
-.\out\build\vs-debug\Debug\Idot.exe
+.\out\build\x64-debug\Debug\Idot.exe
 ```
 
 Type `exit` or `quit` to stop the REPL.
 
+### Run the Rust compiler
+
+```powershell
+.\out\build\x64-debug\cargo-target\debug\idotc.exe .\examples\sample.idot out.c
+```
+
 ## Test
 
 ```powershell
-ctest --test-dir out\build\vs-debug -C Debug --output-on-failure
+ctest --preset x64-debug
 ```
+
+The CMake build now covers both C++ (`Idot`, `idot_tests`) and Rust (`idotc`) targets, and the CTest preset runs both C++ and Rust tests.

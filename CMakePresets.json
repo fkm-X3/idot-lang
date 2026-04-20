@@ -4,13 +4,9 @@
         {
             "name": "windows-base",
             "hidden": true,
-            "generator": "Ninja",
+            "generator": "Visual Studio 17 2022",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "installDir": "${sourceDir}/out/install/${presetName}",
-            "cacheVariables": {
-                "CMAKE_C_COMPILER": "cl.exe",
-                "CMAKE_CXX_COMPILER": "cl.exe"
-            },
             "condition": {
                 "type": "equals",
                 "lhs": "${hostSystemName}",
@@ -23,19 +19,13 @@
             "inherits": "windows-base",
             "architecture": {
                 "value": "x64",
-                "strategy": "external"
-            },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
+                "strategy": "set"
             }
         },
         {
             "name": "x64-release",
             "displayName": "x64 Release",
-            "inherits": "x64-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
+            "inherits": "x64-debug"
         },
         {
             "name": "x86-debug",
@@ -43,19 +33,13 @@
             "inherits": "windows-base",
             "architecture": {
                 "value": "x86",
-                "strategy": "external"
-            },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
+                "strategy": "set"
             }
         },
         {
             "name": "x86-release",
             "displayName": "x86 Release",
-            "inherits": "x86-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
+            "inherits": "x86-debug"
         },
         {
             "name": "linux-debug",
@@ -95,6 +79,84 @@
                 "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
                     "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
                 }
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "x64-debug",
+            "configurePreset": "x64-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "x64-release",
+            "configurePreset": "x64-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "x86-debug",
+            "configurePreset": "x86-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "x86-release",
+            "configurePreset": "x86-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-debug",
+            "configurePreset": "linux-debug"
+        },
+        {
+            "name": "macos-debug",
+            "configurePreset": "macos-debug"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "x64-debug",
+            "configurePreset": "x64-debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "x64-release",
+            "configurePreset": "x64-release",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "x86-debug",
+            "configurePreset": "x86-debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "x86-release",
+            "configurePreset": "x86-release",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-debug",
+            "configurePreset": "linux-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "macos-debug",
+            "configurePreset": "macos-debug",
+            "output": {
+                "outputOnFailure": true
             }
         }
     ]
