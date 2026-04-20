@@ -1,6 +1,6 @@
 use std::error::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Number(i64),
     Str(String),
@@ -9,16 +9,16 @@ pub enum Expr {
     Unary(UnOp, Box<Expr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Add, Sub, Mul, Div,
     Eq, Neq, Lt, LtEq, Gt, GtEq,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnOp { Neg }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Let(String, Expr),
     Assign(String, Expr),
@@ -107,7 +107,12 @@ impl Parser {
     fn peek(&self) -> &Token { &self.tokens[self.pos] }
     fn advance(&mut self) -> Token { let t = self.tokens[self.pos].clone(); self.pos += 1; t }
     fn at_eof(&self) -> bool { matches!(self.peek(), Token::EOF) }
-    fn consume_semicolon(&mut self) -> Result<(), Box<dyn Error>> { match self.peek() { Token::Semicolon => { self.advance(); Ok(()) } _ => Err("Expected ';'".into()) }
+    fn consume_semicolon(&mut self) -> Result<(), Box<dyn Error>> {
+        match self.peek() {
+            Token::Semicolon => { self.advance(); Ok(()) }
+            _ => Err("Expected ';'".into())
+        }
+    }
 
     fn parse_program(&mut self) -> Result<Vec<Stmt>, Box<dyn Error>> {
         let mut out = Vec::new();
@@ -232,4 +237,41 @@ pub fn tokenize_and_parse(src: &str) -> Result<Vec<Stmt>, Box<dyn Error>> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
     Ok(program)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_print_string() {
+        let src = "print \"hello\";";
+        let stmts = tokenize_and_parse(src).unwrap();
+        assert_eq!(stmts, vec![Stmt::Print(Expr::Str("hello".to_string()))]);
+    }
+
+    #[test]
+    fn parse_let_and_print_var() {
+        let src = "let x = 3; print x;";
+        let stmts = tokenize_and_parse(src).unwrap();
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0], Stmt::Let("x".to_string(), Expr::Number(3)));
+        assert_eq!(stmts[1], Stmt::Print(Expr::Var("x".to_string())));
+    }
+
+    #[test]
+    fn parse_arithmetic() {
+        let src = "print 1 + 2 * 3;";
+        let stmts = tokenize_and_parse(src).unwrap();
+        let expected = Stmt::Print(Expr::Binary(
+            Box::new(Expr::Number(1)),
+            BinOp::Add,
+            Box::new(Expr::Binary(
+                Box::new(Expr::Number(2)),
+                BinOp::Mul,
+                Box::new(Expr::Number(3)),
+            )),
+        ));
+        assert_eq!(stmts, vec![expected]);
+    }
 }

@@ -5,7 +5,19 @@ fn escape_c_string(s: &str) -> String {
 pub fn emit_c(stmts: &Vec<crate::lexer::Stmt>) -> Result<String, Box<dyn std::error::Error>> {
     use std::collections::HashSet;
     let mut out = String::new();
-    out.push_str("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\ntypedef struct IdotValue { int is_str; long long num; char* str; } IdotValue;\n\nIdotValue idot_new_num(long long n) { IdotValue v; v.is_str = 0; v.num = n; v.str = NULL; return v; }\nIdotValue idot_new_str(const char* s) { IdotValue v; v.is_str = 1; v.str = strdup(s); v.num = 0; return v; }\nlong long idot_to_num(IdotValue v) { return v.num; }\nvoid idot_print(IdotValue v) { if (v.is_str) puts(v.str); else printf("%lld\\n", (long long)v.num); }\n\nint main(void) {\n");
+    out.push_str(r#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct IdotValue { int is_str; long long num; char* str; } IdotValue;
+
+IdotValue idot_new_num(long long n) { IdotValue v; v.is_str = 0; v.num = n; v.str = NULL; return v; }
+IdotValue idot_new_str(const char* s) { IdotValue v; v.is_str = 1; v.str = strdup(s); v.num = 0; return v; }
+long long idot_to_num(IdotValue v) { return v.num; }
+void idot_print(IdotValue v) { if (v.is_str) puts(v.str); else printf("%lld\n", (long long)v.num); }
+
+int main(void) {
+"#);
 
     let mut declared: HashSet<String> = HashSet::new();
 
