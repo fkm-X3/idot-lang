@@ -1,0 +1,42 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenType {
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    Comma,
+    Dot,
+    Minus,
+    Plus,
+    Semicolon,
+    Slash,
+    Star,
+    Percent,
+    Bang,
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    Identifier,
+    String,
+    Number,
+    KeywordLet,
+    KeywordIf,
+    KeywordElse,
+    KeywordTrue,
+    KeywordFalse,
+    KeywordNil,
+    KeywordPrint,
+    EndOfFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    pub kind: TokenType,
+    pub lexeme: String,
+    pub line: usize,
+    pub column: usize,
+}

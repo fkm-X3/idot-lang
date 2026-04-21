@@ -1,19 +1,81 @@
-mod lexer;
-mod backend;
-
 use std::fs;
+use std::io::{self, Write};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: idotc <input.idot> [output.c]");
-        std::process::exit(1);
+use idot::session::Session;
+
+fn run_file(path: &str) -> i32 {
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("Failed to open file: {path} ({error})");
+            return 1;
+        }
+    };
+
+    let mut session = Session::new();
+    if let Err(error) = session.execute(&source, &mut io::stdout()) {
+        eprintln!("{error}");
+        return 1;
     }
-    let input = fs::read_to_string(&args[1])?;
-    let stmts = lexer::tokenize_and_parse(&input)?;
-    let c = backend::c_backend::emit_c(&stmts)?;
-    let out = if args.len() >= 3 { &args[2] } else { "a.out.c" };
-    fs::write(out, c)?;
-    println!("Wrote {}", out);
-    Ok(())
+
+    0
+}
+
+fn run_repl() -> i32 {
+    let mut session = Session::new();
+    let stdin = io::stdin();
+    let mut line = String::new();
+
+    loop {
+        print!("idot> ");
+        if io::stdout().flush().is_err() {
+            eprintln!("Failed to flush stdout.");
+            return 1;
+        }
+
+        line.clear();
+        match stdin.read_line(&mut line) {
+            Ok(0) => {
+                println!();
+                break;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("Failed to read from stdin: {error}");
+                return 1;
+            }
+        }
+
+        let trimmed = line.trim();
+        if trimmed == "exit" || trimmed == "quit" {
+            break;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Err(error) = session.execute(trimmed, &mut io::stdout()) {
+            eprintln!("{error}");
+        }
+    }
+
+    0
+}
+
+fn run(args: &[String]) -> i32 {
+    if args.len() > 2 {
+        eprintln!("Usage: idot [file.idot]");
+        return 1;
+    }
+
+    if args.len() == 2 {
+        return run_file(&args[1]);
+    }
+
+    run_repl()
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    std::process::exit(run(&args));
 }

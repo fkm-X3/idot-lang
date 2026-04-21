@@ -1,8 +1,8 @@
 # Idot
 
-[![CMake Multi-Platform](https://github.com/fkm-X3/Idot/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/fkm-X3/Idot/actions/workflows/cmake-multi-platform.yml)
+[![Rust Multi-Platform](https://github.com/fkm-X3/Idot/actions/workflows/rust-multi-platform.yml/badge.svg)](https://github.com/fkm-X3/Idot/actions/workflows/rust-multi-platform.yml)
 
-Idot is a small interpreted language implemented in C++20.
+Idot is a small interpreted language implemented in Rust.
 
 ## MVP scope
 
@@ -37,16 +37,8 @@ big
 
 ## Build
 
-### Configure
-
 ```powershell
-cmake --preset x64-debug
-```
-
-### Build
-
-```powershell
-cmake --build --preset x64-debug
+cargo build --workspace
 ```
 
 ## Run
@@ -54,13 +46,13 @@ cmake --build --preset x64-debug
 ### Run a file
 
 ```powershell
-.\out\build\x64-debug\Debug\Idot.exe .\examples\sample.idot
+cargo run -p idot --bin idot -- .\examples\sample.idot
 ```
 
 ### Run REPL
 
 ```powershell
-.\out\build\x64-debug\Debug\Idot.exe
+cargo run -p idot --bin idot
 ```
 
 Type `exit` or `quit` to stop the REPL.
@@ -68,13 +60,11 @@ Type `exit` or `quit` to stop the REPL.
 ### Run the Rust compiler
 
 ```powershell
-.\out\build\x64-debug\cargo-target\debug\idotc.exe .\examples\sample.idot out.c
+cargo run -p idot --bin idotc -- .\examples\sample.idot out.c
 ```
 
 ## Test
 
 ```powershell
-ctest --preset x64-debug
+cargo test --workspace
 ```
-
-The CMake build now covers both C++ (`Idot`, `idot_tests`) and Rust (`idotc`) targets, and the CTest preset runs both C++ and Rust tests.
