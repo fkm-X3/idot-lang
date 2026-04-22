@@ -57,11 +57,13 @@ cargo run -p idot --bin idot
 
 Type `exit` or `quit` to stop the REPL.
 
-### Run the Rust compiler
+### Run the native compiler backend
 
 ```powershell
-cargo run -p idot --bin idotc -- .\examples\sample.idot out.c
+cargo run -p idot --bin idotc -- .\examples\sample.idot
 ```
+
+`idotc` now compiles Idot source directly to machine code via a native backend and executes it.
 
 ## Test
 

@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+cranelift-codegen = "0.131.0"
+cranelift-frontend = "0.131.0"
+cranelift-jit = "0.131.0"
+cranelift-module = "0.131.0"
+cranelift-native = "0.131.0"
 
 [[bin]]
 name = "idot"

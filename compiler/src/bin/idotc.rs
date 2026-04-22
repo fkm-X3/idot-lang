@@ -1,12 +1,12 @@
 use std::fs;
 
-use idot::backend::c_backend;
+use idot::backend::native_backend;
 use idot::{lexer, parser};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: idotc <input.idot> [output.c]");
+    if args.len() != 2 {
+        eprintln!("Usage: idotc <input.idot>");
         std::process::exit(1);
     }
 
@@ -34,19 +34,8 @@ fn main() {
         }
     };
 
-    let c_output = match c_backend::emit_c(&statements) {
-        Ok(output) => output,
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-    };
-
-    let output_path = if args.len() >= 3 { &args[2] } else { "a.out.c" };
-    if let Err(error) = fs::write(output_path, c_output) {
-        eprintln!("Failed to write {output_path}: {error}");
+    if let Err(error) = native_backend::run_native(&statements) {
+        eprintln!("{error}");
         std::process::exit(1);
     }
-
-    println!("Wrote {output_path}");
 }
