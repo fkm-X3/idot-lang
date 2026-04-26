@@ -12,6 +12,10 @@ pub enum Expr {
         op: Token,
         right: Box<Expr>,
     },
+    Call {
+        callee: Token,
+        args: Vec<Expr>,
+    },
     Grouping(Box<Expr>),
     Literal(Value),
     Unary {

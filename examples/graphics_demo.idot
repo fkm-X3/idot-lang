@@ -1,0 +1,5 @@
+create_window(800, 600);
+draw_rect(100, 100, 200, 150, "#FF0000");
+draw_circle(400, 300, 75, "#00FF00");
+draw_line(0, 0, 800, 600, "#0000FF");
+draw_rect(600, 400, 100, 100, "#FFFF00");

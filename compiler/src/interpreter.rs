@@ -155,6 +155,9 @@ impl Interpreter {
                     _ => Err(Self::runtime_error(op, "Unsupported binary operator.")),
                 }
             }
+            Expr::Call { callee, args } => {
+                self.call_function(&callee.lexeme, args)
+            }
             Expr::Grouping(inner) => self.evaluate(inner),
             Expr::Literal(value) => Ok(value.clone()),
             Expr::Unary { op, right } => {
@@ -169,6 +172,125 @@ impl Interpreter {
             }
             Expr::Variable(name) => self.environment.borrow().get(name),
         }
+    }
+
+    fn call_function(&mut self, name: &str, args: &[Expr]) -> Result<Value> {
+        // Evaluate arguments
+        let mut evaluated_args = Vec::new();
+        for arg in args {
+            evaluated_args.push(self.evaluate(arg)?);
+        }
+
+        // Call built-in graphics functions
+        match name {
+            "create_window" => {
+                if evaluated_args.len() != 2 {
+                    return Err(DiagnosticError::new(
+                        ErrorPhase::Runtime,
+                        0,
+                        0,
+                        format!("create_window expects 2 arguments, got {}", evaluated_args.len()),
+                    ));
+                }
+                let width = self.require_number_from_value(&evaluated_args[0])?;
+                let height = self.require_number_from_value(&evaluated_args[1])?;
+                idot_graphics::create_window(width as u32, height as u32);
+                Ok(Value::Nil)
+            }
+            "draw_rect" => {
+                if evaluated_args.len() != 5 {
+                    return Err(DiagnosticError::new(
+                        ErrorPhase::Runtime,
+                        0,
+                        0,
+                        format!("draw_rect expects 5 arguments, got {}", evaluated_args.len()),
+                    ));
+                }
+                let x = self.require_number_from_value(&evaluated_args[0])?;
+                let y = self.require_number_from_value(&evaluated_args[1])?;
+                let width = self.require_number_from_value(&evaluated_args[2])?;
+                let height = self.require_number_from_value(&evaluated_args[3])?;
+                let color = self.require_string_from_value(&evaluated_args[4])?;
+                idot_graphics::draw_rect(x as f32, y as f32, width as f32, height as f32, &color);
+                Ok(Value::Nil)
+            }
+            "draw_circle" => {
+                if evaluated_args.len() != 4 {
+                    return Err(DiagnosticError::new(
+                        ErrorPhase::Runtime,
+                        0,
+                        0,
+                        format!("draw_circle expects 4 arguments, got {}", evaluated_args.len()),
+                    ));
+                }
+                let x = self.require_number_from_value(&evaluated_args[0])?;
+                let y = self.require_number_from_value(&evaluated_args[1])?;
+                let radius = self.require_number_from_value(&evaluated_args[2])?;
+                let color = self.require_string_from_value(&evaluated_args[3])?;
+                idot_graphics::draw_circle(x as f32, y as f32, radius as f32, &color);
+                Ok(Value::Nil)
+            }
+            "draw_line" => {
+                if evaluated_args.len() != 5 {
+                    return Err(DiagnosticError::new(
+                        ErrorPhase::Runtime,
+                        0,
+                        0,
+                        format!("draw_line expects 5 arguments, got {}", evaluated_args.len()),
+                    ));
+                }
+                let x1 = self.require_number_from_value(&evaluated_args[0])?;
+                let y1 = self.require_number_from_value(&evaluated_args[1])?;
+                let x2 = self.require_number_from_value(&evaluated_args[2])?;
+                let y2 = self.require_number_from_value(&evaluated_args[3])?;
+                let color = self.require_string_from_value(&evaluated_args[4])?;
+                idot_graphics::draw_line(x1 as f32, y1 as f32, x2 as f32, y2 as f32, &color);
+                Ok(Value::Nil)
+            }
+            "clear_window" => {
+                if evaluated_args.len() != 1 {
+                    return Err(DiagnosticError::new(
+                        ErrorPhase::Runtime,
+                        0,
+                        0,
+                        format!("clear_window expects 1 argument, got {}", evaluated_args.len()),
+                    ));
+                }
+                let color = self.require_string_from_value(&evaluated_args[0])?;
+                idot_graphics::clear_window(&color);
+                Ok(Value::Nil)
+            }
+            _ => Err(DiagnosticError::new(
+                ErrorPhase::Runtime,
+                0,
+                0,
+                format!("Unknown function: '{}'", name),
+            )),
+        }
+    }
+
+    fn require_number_from_value(&self, value: &Value) -> Result<f64> {
+        if let Value::Number(number) = value {
+            return Ok(*number);
+        }
+        Err(DiagnosticError::new(
+            ErrorPhase::Runtime,
+            0,
+            0,
+            "Expected number".to_string(),
+        ))
+    }
+
+    fn require_string_from_value(&self, value: &Value) -> Result<String> {
+        if let Value::String(s) = value {
+            return Ok(s.clone());
+        }
+        Err(DiagnosticError::new(
+            ErrorPhase::Runtime,
+            0,
+            0,
+            "Expected string".to_string(),
+        ))
     }
 
     fn require_number(&self, value: Value, token: &Token, context: &str) -> Result<f64> {

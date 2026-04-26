@@ -220,7 +220,23 @@ impl Parser {
             return Ok(Expr::Literal(Value::String(self.previous().lexeme.clone())));
         }
         if self.match_types(&[TokenType::Identifier]) {
-            return Ok(Expr::Variable(self.previous().clone()));
+            let name = self.previous().clone();
+            // Check if this is a function call
+            if self.check(TokenType::LeftParen) {
+                self.advance();
+                let mut args = Vec::new();
+                if !self.check(TokenType::RightParen) {
+                    loop {
+                        args.push(self.expression()?);
+                        if !self.match_types(&[TokenType::Comma]) {
+                            break;
+                        }
+                    }
+                }
+                self.consume(TokenType::RightParen, "Expected ')' after function arguments.")?;
+                return Ok(Expr::Call { callee: name, args });
+            }
+            return Ok(Expr::Variable(name));
         }
         if self.match_types(&[TokenType::LeftParen]) {
             let expression = self.expression()?;

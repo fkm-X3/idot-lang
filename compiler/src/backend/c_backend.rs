@@ -62,6 +62,12 @@ fn emit_expr(expression: &Expr) -> Result<String> {
             };
             Ok(call)
         }
+        Expr::Call { .. } => {
+            Err(unsupported(
+                None,
+                "Function calls are not yet supported in C backend.",
+            ))
+        }
         Expr::Grouping(inner) => emit_expr(inner),
         Expr::Literal(value) => Ok(match value {
             Value::Nil => "idot_nil()".to_string(),

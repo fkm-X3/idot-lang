@@ -201,6 +201,14 @@ impl<'module, 'func> CodeGenerator<'module, 'func> {
                 };
                 Ok(self.call_runtime2(runtime_op, left, right))
             }
+            Expr::Call { .. } => {
+                Err(DiagnosticError::new(
+                    ErrorPhase::Runtime,
+                    0,
+                    0,
+                    "Function calls are not yet supported in native backend.",
+                ))
+            }
             Expr::Grouping(inner) => self.emit_expr(inner),
             Expr::Literal(value) => match value {
                 RuntimeValue::Nil => Ok(self.call_runtime0(self.runtime.nil)),
