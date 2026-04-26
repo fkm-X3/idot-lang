@@ -9,7 +9,10 @@ cranelift-frontend = "0.131.0"
 cranelift-jit = "0.131.0"
 cranelift-module = "0.131.0"
 cranelift-native = "0.131.0"
+cranelift-object = "0.131.0"
 idot-graphics = { path = "../idot-graphics" }
+idot-runtime = { path = "../idot-runtime" }
+
 
 [[bin]]
 name = "idot"

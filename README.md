@@ -2,7 +2,7 @@
 
 [![Rust Multi-Platform](https://github.com/fkm-X3/Idot/actions/workflows/rust-multi-platform.yml/badge.svg)](https://github.com/fkm-X3/Idot/actions/workflows/rust-multi-platform.yml)
 
-Idot is a small interpreted language implemented in Rust with a growing set of features.
+Idot is a small compiled language implemented in Rust with a growing set of features.
 
 ## Features
 
@@ -18,6 +18,14 @@ The current MVP includes:
 - **Function calls** (new!)
 
 Loops and user-defined functions are deferred to post-MVP milestones.
+
+### Compilation Model
+
+Idot has transitioned from JIT interpretation to ahead-of-time (AOT) compilation:
+
+- **AOT Compiler**: The `idot` binary now compiles Idot source code to COFF object files using Cranelift's ObjectModule backend
+- **Runtime Library**: A separate `idot-runtime` crate provides the runtime functions required by compiled code
+- **Object Files**: Generated `.o` files can be linked with the runtime library to create standalone executables
 
 ### Graphics Library (New!)
 
@@ -66,33 +74,25 @@ cargo build --workspace
 
 ## Run
 
-### Run a file
+### Compile to object file
+
+The `idot` binary compiles Idot source to COFF object files:
 
 ```powershell
 cargo run -p idot --bin idot -- .\examples\sample.idot
 ```
 
-### Run graphics example
+This generates `.\examples\sample.idot.o` which can be linked with the runtime library to create an executable.
 
-```powershell
-cargo run -p idot --bin idot -- .\examples\graphics_demo.idot
-```
+### Run the alternative native backend
 
-### Run REPL
-
-```powershell
-cargo run -p idot --bin idot
-```
-
-Type `exit` or `quit` to stop the REPL.
-
-### Run the native compiler backend
+The `idotc` binary provides the previous JIT-based execution model for comparison:
 
 ```powershell
 cargo run -p idot --bin idotc -- .\examples\sample.idot
 ```
 
-`idotc` compiles Idot source directly to machine code via a native backend and executes it.
+`idotc` compiles Idot source directly to machine code via Cranelift's JIT module and executes it immediately.
 
 ## Test
 
@@ -106,3 +106,18 @@ cargo test --workspace
 python test_graphics.py
 ```
 
+## Architecture
+
+### Compilation Pipeline
+
+1. **Lexer**: Tokenizes source code
+2. **Parser**: Builds an abstract syntax tree (AST)
+3. **Code Generation**: Converts AST to Cranelift IR
+4. **Object Emission**: ObjectModule emits COFF object files
+5. **Linking**: Object files are linked with `idot-runtime` to create executables
+
+### Crates
+
+- `idot` (compiler): Main compiler and code generation
+- `idot-graphics`: Graphics library bindings
+- `idot-runtime`: Runtime functions for compiled code (values, operators, I/O)

@@ -1,36 +1,22 @@
-use std::io::Write;
+use std::path::Path;
 
+use crate::backend::aot_backend;
 use crate::diagnostics::Result;
-use crate::interpreter::Interpreter;
 use crate::{lexer, parser};
 
-pub struct Session {
-    interpreter: Interpreter,
-}
+pub struct Session;
 
 impl Session {
-    pub fn new() -> Self {
-        Self {
-            interpreter: Interpreter::new(),
-        }
-    }
-
-    pub fn execute(&mut self, source: &str, output: &mut dyn Write) -> Result<()> {
+    pub fn compile_aot<P: AsRef<Path>>(source: &str, output_path: P) -> Result<()> {
         let tokens = lexer::scan_tokens(source)?;
         let statements = parser::parse(tokens)?;
-        self.interpreter.execute(&statements, output)
-    }
-}
-
-impl Default for Session {
-    fn default() -> Self {
-        Self::new()
+        aot_backend::compile_aot(&statements, output_path.as_ref().to_str().unwrap())
     }
 }
 
 pub fn execute_source_to_string(source: &str) -> Result<String> {
-    let mut session = Session::new();
-    let mut output = Vec::new();
-    session.execute(source, &mut output)?;
-    Ok(String::from_utf8(output).expect("runtime output must be valid UTF-8"))
+    let tokens = lexer::scan_tokens(source)?;
+    let statements = parser::parse(tokens)?;
+    aot_backend::execute_and_return_output(&statements)
 }
+

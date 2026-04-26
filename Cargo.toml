@@ -1,4 +1,4 @@
 [workspace]
-members = ["compiler", "idot-graphics"]
+members = ["compiler", "idot-graphics", "idot-runtime"]
 default-members = ["compiler"]
 resolver = "2"
