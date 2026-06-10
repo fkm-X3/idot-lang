@@ -1,6 +1,0 @@
-# Hello world in idot
-
-fn main() {
-    print("Hello from idot!")
-    print_int(42)
-}
