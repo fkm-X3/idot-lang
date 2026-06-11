@@ -2,3 +2,7 @@
 name = "idot-lang"
 version = "0.1.0"
 edition = "2021"
+
+[lib]
+name = "idot_lang"
+path = "src/lib.rs"

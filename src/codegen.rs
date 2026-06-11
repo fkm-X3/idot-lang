@@ -5,23 +5,30 @@ pub struct CodeGen {
     output: String,
     val_counter: u64,
     label_counter: u64,
+    str_counter: u64,
     named_values: HashMap<String, String>,
+    string_globals: Vec<(String, String)>,
 }
 
 impl CodeGen {
     pub fn new() -> Self {
         let mut ir = String::new();
         ir.push_str("; ModuleID = 'main'\n");
-        ir.push_str("target triple = \"x86_64-pc-windows-msvc\"\n");
         ir.push_str("\n");
         ir.push_str("declare i32 @printf(ptr, ...)\n");
-        ir.push_str("@.printfmt = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");
+        ir.push_str("declare ptr @fgets(ptr, i32, ptr)\n");
+        ir.push_str("declare i64 @atoll(ptr)\n");
+        ir.push_str("declare ptr @__acrt_iob_func(i32)\n");
+        ir.push_str("@.fmt_int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");
+        ir.push_str("@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n");
         ir.push_str("\n");
         CodeGen {
             output: ir,
             val_counter: 1,
             label_counter: 0,
+            str_counter: 0,
             named_values: HashMap::new(),
+            string_globals: Vec::new(),
         }
     }
 
@@ -37,9 +44,25 @@ impl CodeGen {
         format!(".L{}", n)
     }
 
+    fn string_global(&mut self, s: &str) -> String {
+        let name = format!("@.str_{}", self.str_counter);
+        self.str_counter += 1;
+        self.string_globals.push((name.clone(), s.to_string()));
+        name
+    }
+
     pub fn compile(&mut self, program: &parser::Program) -> Result<String, String> {
         for func in &program.functions {
             self.compile_function(func)?;
+        }
+        for (name, content) in &self.string_globals {
+            let bytes: Vec<String> = content.bytes().chain(std::iter::once(0u8))
+                .map(|b| format!("i8 {}", b as i8))
+                .collect();
+            self.output.push_str(&format!(
+                "{} = private unnamed_addr constant [{} x i8] [{}]\n",
+                name, bytes.len(), bytes.join(", ")
+            ));
         }
         Ok(self.output.clone())
     }
@@ -179,6 +202,9 @@ impl CodeGen {
         let p = "  ".repeat(indent);
         match expr {
             parser::Expr::Integer(n) => Ok(format!("{}", n)),
+            parser::Expr::String(_) => {
+                Err("string literal used outside of print call".into())
+            }
             parser::Expr::Bool(b) => Ok(if *b { "1".to_string() } else { "0".to_string() }),
             parser::Expr::Ident(name) => {
                 let alloc = self.named_values.get(name).cloned();
@@ -220,6 +246,7 @@ impl CodeGen {
                         parser::BinOp::Sub => self.output.push_str(&format!("{} = sub i64 {}, {}\n", res, l, r)),
                         parser::BinOp::Mul => self.output.push_str(&format!("{} = mul i64 {}, {}\n", res, l, r)),
                         parser::BinOp::Div => self.output.push_str(&format!("{} = sdiv i64 {}, {}\n", res, l, r)),
+                        parser::BinOp::Mod => self.output.push_str(&format!("{} = srem i64 {}, {}\n", res, l, r)),
                         _ => unreachable!(),
                     }
                     Ok(res)
@@ -250,6 +277,9 @@ impl CodeGen {
                 if name == "print" {
                     return self.compile_print(args, indent);
                 }
+                if name == "read" {
+                    return self.compile_read(indent);
+                }
 
                 let mut arg_vals = Vec::new();
                 for arg in args {
@@ -267,14 +297,51 @@ impl CodeGen {
 
     fn compile_print(&mut self, args: &[parser::Expr], indent: usize) -> Result<String, String> {
         for arg in args {
-            let v = self.compile_expression(arg, indent)?;
-            let fmt = self.new_val();
-            self.output
-                .push_str(&format!("{} = getelementptr [6 x i8], ptr @.printfmt, i64 0, i64 0\n", fmt));
-            let call = self.new_val();
-            self.output
-                .push_str(&format!("{} = call i32 (ptr, ...) @printf(ptr {}, i64 {})\n", call, fmt, v));
+            match arg {
+                parser::Expr::String(s) => {
+                    let g = self.string_global(s);
+                    let fmt = self.new_val();
+                    self.output.push_str(&format!(
+                        "{} = getelementptr [4 x i8], ptr @.fmt_str, i64 0, i64 0\n", fmt
+                    ));
+                    let call = self.new_val();
+                    self.output.push_str(&format!(
+                        "{} = call i32 (ptr, ...) @printf(ptr {}, ptr {})\n", call, fmt, g
+                    ));
+                }
+                _ => {
+                    let v = self.compile_expression(arg, indent)?;
+                    let fmt = self.new_val();
+                    self.output.push_str(&format!(
+                        "{} = getelementptr [6 x i8], ptr @.fmt_int, i64 0, i64 0\n", fmt
+                    ));
+                    let call = self.new_val();
+                    self.output.push_str(&format!(
+                        "{} = call i32 (ptr, ...) @printf(ptr {}, i64 {})\n", call, fmt, v
+                    ));
+                }
+            }
         }
         Ok("0".to_string())
+    }
+
+    fn compile_read(&mut self, _indent: usize) -> Result<String, String> {
+        let buf = self.new_val();
+        self.output.push_str(&format!("{} = alloca [64 x i8]\n", buf));
+        let iob = self.new_val();
+        self.output.push_str(&format!("{} = call ptr @__acrt_iob_func(i32 0)\n", iob));
+        let buf_ptr = self.new_val();
+        self.output.push_str(&format!(
+            "{} = getelementptr [64 x i8], ptr {}, i64 0, i64 0\n", buf_ptr, buf
+        ));
+        let call = self.new_val();
+        self.output.push_str(&format!(
+            "{} = call ptr @fgets(ptr {}, i32 64, ptr {})\n", call, buf_ptr, iob
+        ));
+        let result = self.new_val();
+        self.output.push_str(&format!(
+            "{} = call i64 @atoll(ptr {})\n", result, buf_ptr
+        ));
+        Ok(result)
     }
 }

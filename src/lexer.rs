@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Integer(i64),
+    String(String),
     Identifier(String),
 
     Fn,
@@ -19,6 +20,7 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Percent,
 
     Equal,
     EqualEqual,
@@ -56,12 +58,6 @@ impl Lexer {
 
     fn peek(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
-    }
-
-    fn advance(&mut self) -> Option<char> {
-        let ch = self.chars.get(self.pos).copied();
-        self.pos += 1;
-        ch
     }
 
     fn skip_whitespace(&mut self) {
@@ -102,6 +98,31 @@ impl Lexer {
                         }
                     }
                     tokens.push(Token::Integer(num.parse().unwrap()));
+                }
+                Some('"') => {
+                    self.pos += 1;
+                    let mut s = String::new();
+                    while let Some(ch) = self.peek() {
+                        if ch == '"' {
+                            self.pos += 1;
+                            break;
+                        }
+                        if ch == '\\' {
+                            self.pos += 1;
+                            match self.peek() {
+                                Some('n') => s.push('\n'),
+                                Some('t') => s.push('\t'),
+                                Some('"') => s.push('"'),
+                                Some('\\') => s.push('\\'),
+                                _ => s.push('\\'),
+                            }
+                            self.pos += 1;
+                        } else {
+                            s.push(ch);
+                            self.pos += 1;
+                        }
+                    }
+                    tokens.push(Token::String(s));
                 }
                 Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {
                     let mut ident = String::new();
@@ -176,6 +197,7 @@ impl Lexer {
                 Some('+') => { self.pos += 1; tokens.push(Token::Plus); }
                 Some('*') => { self.pos += 1; tokens.push(Token::Star); }
                 Some('/') => { self.pos += 1; tokens.push(Token::Slash); }
+                Some('%') => { self.pos += 1; tokens.push(Token::Percent); }
                 Some('(') => { self.pos += 1; tokens.push(Token::LParen); }
                 Some(')') => { self.pos += 1; tokens.push(Token::RParen); }
                 Some('{') => { self.pos += 1; tokens.push(Token::LBrace); }

@@ -48,6 +48,7 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Integer(i64),
+    String(String),
     Bool(bool),
     Ident(String),
     Binary {
@@ -71,7 +72,7 @@ pub enum Expr {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinOp {
-    Add, Sub, Mul, Div,
+    Add, Sub, Mul, Div, Mod,
     Eq, Ne, Lt, Le, Gt, Ge,
 }
 
@@ -118,21 +119,6 @@ impl Parser {
             ));
             false
         }
-    }
-
-    fn expect_any(&mut self, expected: &[Token]) -> Option<Token> {
-        for exp in expected {
-            if self.peek() == exp {
-                return Some(self.advance());
-            }
-        }
-        self.errors.push(format!(
-            "expected one of {:?}, got {:?} at position {}",
-            expected,
-            self.peek(),
-            self.pos
-        ));
-        None
     }
 
     pub fn parse_program(&mut self) -> Program {
@@ -343,10 +329,11 @@ impl Parser {
 
     fn parse_factor(&mut self) -> Expr {
         let mut left = self.parse_unary();
-        while let Token::Star | Token::Slash = self.peek() {
+        while let Token::Star | Token::Slash | Token::Percent = self.peek() {
             let op = match self.advance() {
                 Token::Star => BinOp::Mul,
                 Token::Slash => BinOp::Div,
+                Token::Percent => BinOp::Mod,
                 _ => unreachable!(),
             };
             let right = self.parse_unary();
@@ -388,6 +375,7 @@ impl Parser {
     fn parse_primary(&mut self) -> Expr {
         match self.advance() {
             Token::Integer(n) => Expr::Integer(n),
+            Token::String(s) => Expr::String(s),
             Token::True => Expr::Bool(true),
             Token::False => Expr::Bool(false),
             Token::Identifier(name) => {
