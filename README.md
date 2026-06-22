@@ -149,7 +149,6 @@ idot/
 │   │   └── main.rs
 │   └── Cargo.toml
 ├── examples/              # Example Idot programs
-├── plan.md                # Full language design document
 └── README.md              # This file
 ```
 
