@@ -1,0 +1,6 @@
+/target
+*.c
+*.exe
+*.o
+*.obj
+build/
