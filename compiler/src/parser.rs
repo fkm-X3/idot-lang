@@ -183,6 +183,7 @@ impl Parser {
             name,
             params,
             return_type,
+            resolved_ret_type: None,
             body: Block::empty(),
             is_extern: true,
             foreign_lib: None,
@@ -199,6 +200,7 @@ impl Parser {
             name,
             params,
             return_type,
+            resolved_ret_type: None,
             body,
             is_extern: false,
             foreign_lib: None,
@@ -237,7 +239,7 @@ impl Parser {
             } else {
                 None
             };
-            params.push(Param { name, type_, default });
+            params.push(Param { name, type_, default, resolved_type: None });
             if *self.peek() == TokenKind::Comma {
                 self.skip();
                 if *self.peek() == TokenKind::RParen {
@@ -267,13 +269,13 @@ impl Parser {
             self.skip();
             let init = self.parse_expr();
             self.expect(TokenKind::Semicolon);
-            return Decl::Const(ConstDecl { name, type_: None, init });
+            return Decl::Const(ConstDecl { name, type_: None, init, resolved_type: None });
         }
 
         self.expect(TokenKind::Eq);
         let init = self.parse_expr();
         self.expect(TokenKind::Semicolon);
-        Decl::Const(ConstDecl { name, type_, init })
+        Decl::Const(ConstDecl { name, type_, init, resolved_type: None })
     }
 
     // Odin-style: ident "::" expr ";"
@@ -340,7 +342,7 @@ impl Parser {
 
         let init = self.parse_expr();
         self.expect(TokenKind::Semicolon);
-        Decl::Const(ConstDecl { name, type_: None, init })
+        Decl::Const(ConstDecl { name, type_: None, init, resolved_type: None })
     }
 
     // === Var Declaration ===
@@ -351,7 +353,7 @@ impl Parser {
     }
 
     fn parse_var_decl_typed(&mut self) -> Decl {
-        self.parse_var_decl_typed_mut(false)
+        self.parse_var_decl_typed_mut(true)
     }
 
     fn parse_var_decl_typed_mut(&mut self, mutable: bool) -> Decl {
@@ -365,7 +367,7 @@ impl Parser {
             None
         };
         self.expect(TokenKind::Semicolon);
-        Decl::Var(VarDecl { name, mutable, type_: Some(type_), init })
+        Decl::Var(VarDecl { name, mutable, type_: Some(type_), init, resolved_type: None })
     }
 
     // ident ":=" expr ";"
@@ -374,7 +376,7 @@ impl Parser {
         self.skip(); // :=
         let init = Some(self.parse_expr());
         self.expect(TokenKind::Semicolon);
-        Decl::Var(VarDecl { name, mutable: true, type_: None, init })
+        Decl::Var(VarDecl { name, mutable: true, type_: None, init, resolved_type: None })
     }
 
     // === Struct Declaration ===

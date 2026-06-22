@@ -152,6 +152,91 @@ impl CBackend {
         }
     }
 
+    fn emit_type_val(&mut self, tv: &TypeVal) {
+        match tv {
+            TypeVal::Void => self.output.push_str("void"),
+            TypeVal::Bool => self.output.push_str("bool"),
+            TypeVal::Int(size) => match size {
+                IntSize::I8 => self.output.push_str("int8_t"),
+                IntSize::I16 => self.output.push_str("int16_t"),
+                IntSize::I32 => self.output.push_str("int32_t"),
+                IntSize::I64 => self.output.push_str("int64_t"),
+                IntSize::U8 => self.output.push_str("uint8_t"),
+                IntSize::U16 => self.output.push_str("uint16_t"),
+                IntSize::U32 => self.output.push_str("uint32_t"),
+                IntSize::U64 => self.output.push_str("uint64_t"),
+                IntSize::Isize => self.output.push_str("intptr_t"),
+                IntSize::Usize => self.output.push_str("size_t"),
+            },
+            TypeVal::Float(size) => match size {
+                FloatSize::F32 => self.output.push_str("float"),
+                FloatSize::F64 => self.output.push_str("double"),
+            },
+            TypeVal::Ptr(inner) => {
+                self.emit_type_val(inner);
+                self.output.push('*');
+            }
+            TypeVal::ConstPtr(inner) => {
+                self.output.push_str("const ");
+                self.emit_type_val(inner);
+                self.output.push('*');
+            }
+            TypeVal::NullablePtr(inner) => {
+                self.emit_type_val(inner);
+                self.output.push('*');
+            }
+            TypeVal::ManyPtr(inner) => {
+                self.emit_type_val(inner);
+                self.output.push('*');
+            }
+            TypeVal::Slice(inner) => {
+                self.output.push_str("struct { ");
+                self.emit_type_val(inner);
+                self.output.push_str("* ptr; size_t len; }");
+            }
+            TypeVal::Array(size, inner) => {
+                self.emit_type_val(inner);
+                self.output.push_str(&format!(" [{}]", size));
+            }
+            TypeVal::Optional(inner) => {
+                self.output.push_str("struct { bool has; ");
+                self.emit_type_val(inner);
+                self.output.push_str(" val; }");
+            }
+            TypeVal::ErrorUnion(inner) => {
+                self.output.push_str("struct { uintptr_t err; union {");
+                self.emit_type_val(inner);
+                self.output.push_str(" val; } data; }");
+            }
+            TypeVal::Fn(params, ret) => {
+                if let Some(ret) = ret {
+                    self.emit_type_val(ret);
+                } else {
+                    self.output.push_str("void");
+                }
+                self.output.push_str(" (*)(");
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 { self.output.push_str(", "); }
+                    self.emit_type_val(p);
+                }
+                self.output.push(')');
+            }
+            TypeVal::Struct(fields) => {
+                self.output.push_str("struct { ");
+                for (i, (name, ft)) in fields.iter().enumerate() {
+                    if i > 0 { self.output.push_str("; "); }
+                    self.emit_type_val(ft);
+                    self.output.push(' ');
+                    self.output.push_str(name);
+                }
+                self.output.push_str("; }");
+            }
+            TypeVal::Named(name) => {
+                self.emit_type_name(name);
+            }
+        }
+    }
+
     // === Declarations ===
 
     fn emit_extern_fn(&mut self, f: &FnDecl) {
@@ -161,7 +246,9 @@ impl CBackend {
     }
 
     fn emit_fn_sig(&mut self, f: &FnDecl) {
-        if let Some(ret) = &f.return_type {
+        if let Some(ret) = &f.resolved_ret_type {
+            self.emit_type_val(ret);
+        } else if let Some(ret) = &f.return_type {
             self.emit_type(ret);
         } else {
             self.output.push_str("void");
@@ -171,20 +258,19 @@ impl CBackend {
         self.output.push('(');
         for (i, p) in f.params.iter().enumerate() {
             if i > 0 { self.output.push_str(", "); }
-            self.emit_param_type(&p.type_);
+            self.emit_param_type(&p.type_, &p.resolved_type);
             self.output.push(' ');
             self.output.push_str(&p.name);
         }
         self.output.push(')');
     }
 
-    fn emit_param_type(&mut self, type_: &Type) {
-        // In C, function parameters of array type decay to pointers.
-        // Arrays in function params should be emitted as pointers.
-        // We handle this by just emitting the type normally.
-        // BUT if we emit something like "int[10]" as a parameter type,
-        // C treats it as a pointer, so this is fine.
-        self.emit_type(type_);
+    fn emit_param_type(&mut self, type_: &Type, resolved: &Option<TypeVal>) {
+        if let Some(tv) = resolved {
+            self.emit_type_val(tv);
+        } else {
+            self.emit_type(type_);
+        }
     }
 
     fn emit_fn_def(&mut self, f: &FnDecl) {
@@ -211,7 +297,9 @@ impl CBackend {
 
     fn emit_global_var(&mut self, v: &VarDecl) {
         self.output.push_str(if v.mutable { "" } else { "const " });
-        if let Some(type_) = &v.type_ {
+        if let Some(tv) = &v.resolved_type {
+            self.emit_type_val(tv);
+        } else if let Some(type_) = &v.type_ {
             self.emit_type(type_);
         } else {
             self.output.push_str("int"); // inferred fallback
@@ -227,7 +315,9 @@ impl CBackend {
 
     fn emit_global_const(&mut self, c: &ConstDecl) {
         self.output.push_str("const ");
-        if let Some(type_) = &c.type_ {
+        if let Some(tv) = &c.resolved_type {
+            self.emit_type_val(tv);
+        } else if let Some(type_) = &c.type_ {
             self.emit_type(type_);
         } else {
             self.output.push_str("int");
@@ -248,7 +338,9 @@ impl CBackend {
                 Decl::Var(v) => {
                     self.emit_indent();
                     if !v.mutable { self.output.push_str("const "); }
-                    if let Some(type_) = &v.type_ {
+                    if let Some(tv) = &v.resolved_type {
+                        self.emit_type_val(tv);
+                    } else if let Some(type_) = &v.type_ {
                         self.emit_type(type_);
                     } else {
                         self.output.push_str("int");
@@ -264,7 +356,9 @@ impl CBackend {
                 Decl::Const(c) => {
                     self.emit_indent();
                     self.output.push_str("const ");
-                    if let Some(type_) = &c.type_ {
+                    if let Some(tv) = &c.resolved_type {
+                        self.emit_type_val(tv);
+                    } else if let Some(type_) = &c.type_ {
                         self.emit_type(type_);
                     } else {
                         self.output.push_str("int");

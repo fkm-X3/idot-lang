@@ -1,0 +1,26 @@
+// Math — arithmetic, const inference, type coercion
+//
+// compile: idot compile examples/math.idot
+// run:     ./examples/math && echo $?
+
+fn add(x: i32, y: i32) -> i32 {
+    return x + y;
+}
+
+fn mul(x: i32, y: i32) -> i32 {
+    return x * y;
+}
+
+fn div(x: i32, y: i32) -> i32 {
+    return x / y;
+}
+
+fn main() -> i32 {
+    const a := 12;
+    const b := 4;
+    const sum := add(a, b);
+    const product := mul(a, b);
+    const quotient := div(a, b);
+    const result := sum + product - quotient;
+    return result;  // (12+4) + (12*4) - (12/4) = 16 + 48 - 3 = 61
+}

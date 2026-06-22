@@ -3,10 +3,37 @@ use std::ops::Range;
 
 pub type Span = Range<usize>;
 
-#[derive(Debug, Clone)]
-pub struct Spanned<T> {
-    pub node: T,
-    pub span: Span,
+// === RESOLVED TYPES (produced by semantic analysis) ===
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeVal {
+    Void,
+    Bool,
+    Int(IntSize),
+    Float(FloatSize),
+    Ptr(Box<TypeVal>),
+    ConstPtr(Box<TypeVal>),
+    NullablePtr(Box<TypeVal>),
+    ManyPtr(Box<TypeVal>),
+    Slice(Box<TypeVal>),
+    Array(u64, Box<TypeVal>),
+    Optional(Box<TypeVal>),
+    ErrorUnion(Box<TypeVal>),
+    Fn(Vec<TypeVal>, Option<Box<TypeVal>>),
+    Struct(Vec<(String, TypeVal)>),
+    Named(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntSize {
+    I8, I16, I32, I64,
+    U8, U16, U32, U64,
+    Isize, Usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FloatSize {
+    F32, F64,
 }
 
 // === DECLARATIONS ===
@@ -29,6 +56,7 @@ pub struct VarDecl {
     pub mutable: bool,
     pub type_: Option<Type>,
     pub init: Option<Expr>,
+    pub resolved_type: Option<TypeVal>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +64,7 @@ pub struct ConstDecl {
     pub name: String,
     pub type_: Option<Type>,
     pub init: Expr,
+    pub resolved_type: Option<TypeVal>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +72,7 @@ pub struct Param {
     pub name: String,
     pub type_: Type,
     pub default: Option<Expr>,
+    pub resolved_type: Option<TypeVal>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +84,7 @@ pub struct FnDecl {
     pub is_extern: bool,
     pub foreign_lib: Option<String>,
     pub pub_: bool,
+    pub resolved_ret_type: Option<TypeVal>,
 }
 
 #[derive(Debug, Clone)]

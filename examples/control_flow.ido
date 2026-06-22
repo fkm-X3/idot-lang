@@ -1,0 +1,17 @@
+// Control flow — if/else, while (using literal limit)
+//
+// compile: idot compile examples/control_flow.ido
+
+fn classify(x: i32) -> i32 {
+    if x < 0 {
+        return 111;
+    } else {
+        return 222;
+    }
+}
+
+fn main() -> i32 {
+    const c := classify(-5);
+    const s := classify(10);
+    return c + s;  // 111 + 222 = 333
+}
