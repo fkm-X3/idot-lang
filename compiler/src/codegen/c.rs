@@ -4,6 +4,9 @@ pub struct CBackend {
     output: String,
     indent: usize,
     fn_decls: Vec<String>,
+    emitted_types: std::collections::HashSet<String>,
+    for_counter: usize,
+    var_types: std::collections::HashMap<String, TypeVal>,
 }
 
 impl CBackend {
@@ -12,6 +15,9 @@ impl CBackend {
             output: String::new(),
             indent: 0,
             fn_decls: Vec::new(),
+            emitted_types: std::collections::HashSet::new(),
+            for_counter: 0,
+            var_types: std::collections::HashMap::new(),
         }
     }
 
@@ -31,6 +37,11 @@ impl CBackend {
                 }
                 self.fn_decls.push(be.output);
             }
+        }
+
+        // Emit type definitions (struct, enum, union) BEFORE function declarations
+        for decl in program {
+            self.emit_type_def(decl);
         }
 
         // Emit function declarations
@@ -56,6 +67,52 @@ impl CBackend {
         }
 
         self.output.clone()
+    }
+
+    fn emit_type_def(&mut self, decl: &Decl) {
+        match decl {
+            Decl::Struct(s) if !s.name.is_empty() => {
+                if self.emitted_types.contains(&s.name) {
+                    return;
+                }
+                self.emitted_types.insert(s.name.clone());
+                self.output.push_str("typedef struct ");
+                self.output.push_str(&s.name);
+                self.output.push_str(" { ");
+                for (i, field) in s.fields.iter().enumerate() {
+                    if i > 0 { self.output.push_str("; "); }
+                    self.emit_type(&field.type_);
+                    self.output.push(' ');
+                    self.output.push_str(&field.name);
+                }
+                self.output.push_str("; } ");
+                self.output.push_str(&s.name);
+                self.emit_line(";");
+                self.emit_line("");
+            }
+            Decl::Enum(e) if !e.name.is_empty() => {
+                if self.emitted_types.contains(&e.name) {
+                    return;
+                }
+                self.emitted_types.insert(e.name.clone());
+                self.output.push_str("typedef enum ");
+                self.output.push_str(&e.name);
+                self.output.push_str(" { ");
+                for (i, v) in e.variants.iter().enumerate() {
+                    if i > 0 { self.output.push_str(", "); }
+                    self.output.push_str(&v.name);
+                    if let Some(ref val) = v.value {
+                        self.output.push_str(" = ");
+                        self.emit_expr(val);
+                    }
+                }
+                self.output.push_str(" } ");
+                self.output.push_str(&e.name);
+                self.emit_line(";");
+                self.emit_line("");
+            }
+            _ => {}
+        }
     }
 
     fn emit_header(&mut self) {
@@ -296,6 +353,9 @@ impl CBackend {
     }
 
     fn emit_global_var(&mut self, v: &VarDecl) {
+        if let Some(tv) = &v.resolved_type {
+            self.var_types.insert(v.name.clone(), tv.clone());
+        }
         self.output.push_str(if v.mutable { "" } else { "const " });
         if let Some(tv) = &v.resolved_type {
             self.emit_type_val(tv);
@@ -314,6 +374,9 @@ impl CBackend {
     }
 
     fn emit_global_const(&mut self, c: &ConstDecl) {
+        if let Some(tv) = &c.resolved_type {
+            self.var_types.insert(c.name.clone(), tv.clone());
+        }
         self.output.push_str("const ");
         if let Some(tv) = &c.resolved_type {
             self.emit_type_val(tv);
@@ -336,6 +399,9 @@ impl CBackend {
             Stmt::Decl(decl) => match decl {
                 Decl::Fn(f) => self.emit_fn_def(f),
                 Decl::Var(v) => {
+                    if let Some(tv) = &v.resolved_type {
+                        self.var_types.insert(v.name.clone(), tv.clone());
+                    }
                     self.emit_indent();
                     if !v.mutable { self.output.push_str("const "); }
                     if let Some(tv) = &v.resolved_type {
@@ -354,6 +420,9 @@ impl CBackend {
                     self.emit_line(";");
                 }
                 Decl::Const(c) => {
+                    if let Some(tv) = &c.resolved_type {
+                        self.var_types.insert(c.name.clone(), tv.clone());
+                    }
                     self.emit_indent();
                     self.output.push_str("const ");
                     if let Some(tv) = &c.resolved_type {
@@ -474,14 +543,99 @@ impl CBackend {
                     }
                 }
             }
-            Expr::For(iterable, _item, _index, body) => {
-                // For Phase 1, we emit a simple for loop over array-like things
-                // TODO: proper for loop codegen
-                self.output.push_str("{ /* for loop: ");
-                self.emit_expr(iterable);
-                self.output.push_str(" */ ");
-                self.emit_block_as_stmt(body);
-                self.output.push_str(" }");
+            Expr::For(iterable, item, index, body) => {
+                let idx = self.for_counter;
+                self.for_counter += 1;
+                // Check if iterable is a variable with a known type
+                let iter_type = match iterable.as_ref() {
+                    Expr::Ident(name) => self.var_types.get(name),
+                    _ => None,
+                };
+
+                if iter_type.map_or(false, |t| matches!(t, TypeVal::Slice(_))) {
+                    // Slice iteration: use .ptr and .len
+                    let idx_str = idx.to_string();
+                    self.output.push_str("{ size_t _for_len");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str(" = ");
+                    self.emit_expr(iterable);
+                    self.output.push_str(".len; ");
+                    self.output.push_str("for (size_t _for_i");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str(" = 0; _for_i");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str(" < _for_len");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str("; _for_i");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str("++) { ");
+                    if let Some(item_name) = item {
+                        self.output.push_str("int ");
+                        self.output.push_str(item_name);
+                        self.output.push_str(" = ");
+                        self.emit_expr(iterable);
+                        self.output.push_str(".ptr[_for_i");
+                        self.output.push_str(&idx_str);
+                        self.output.push_str("]; ");
+                    }
+                    if let Some(idx_name) = index {
+                        self.output.push_str("size_t ");
+                        self.output.push_str(idx_name);
+                        self.output.push_str(" = _for_i");
+                        self.output.push_str(&idx_str);
+                        self.output.push_str("; ");
+                    }
+                    for stmt in &body.stmts {
+                        self.emit_stmt(stmt);
+                    }
+                    self.output.push_str(" } }");
+                } else if iter_type.map_or(false, |t| matches!(t, TypeVal::Array(_, _))) {
+                    // Array iteration: use sizeof/sizeof
+                    let idx_str = idx.to_string();
+                    self.output.push_str("{ size_t _for_len");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str(" = sizeof(");
+                    self.emit_expr(iterable);
+                    self.output.push_str(")/sizeof(");
+                    self.emit_expr(iterable);
+                    self.output.push_str("[0]); ");
+                    self.output.push_str("for (size_t _for_i");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str(" = 0; _for_i");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str(" < _for_len");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str("; _for_i");
+                    self.output.push_str(&idx_str);
+                    self.output.push_str("++) { ");
+                    if let Some(item_name) = item {
+                        self.output.push_str("int ");
+                        self.output.push_str(item_name);
+                        self.output.push_str(" = ");
+                        self.emit_expr(iterable);
+                        self.output.push_str("[_for_i");
+                        self.output.push_str(&idx_str);
+                        self.output.push_str("]; ");
+                    }
+                    if let Some(idx_name) = index {
+                        self.output.push_str("size_t ");
+                        self.output.push_str(idx_name);
+                        self.output.push_str(" = _for_i");
+                        self.output.push_str(&idx_str);
+                        self.output.push_str("; ");
+                    }
+                    for stmt in &body.stmts {
+                        self.emit_stmt(stmt);
+                    }
+                    self.output.push_str(" } }");
+                } else {
+                    // Unknown type: emit placeholder
+                    self.output.push_str("{ /* for loop: ");
+                    self.emit_expr(iterable);
+                    self.output.push_str(" */ ");
+                    self.emit_block_as_stmt(body);
+                    self.output.push_str(" }");
+                }
             }
             Expr::While(cond, body) => {
                 self.output.push_str("while (");
@@ -490,41 +644,70 @@ impl CBackend {
                 self.emit_block_as_stmt(body);
             }
             Expr::Switch(expr, arms, else_arm) => {
-                let _anon_count = self.output.len();
-                self.output.push_str("switch (");
-                self.emit_expr(expr);
-                self.output.push_str(") {");
-                for arm in arms {
-                    for pat in &arm.patterns {
-                        match pat {
-                            SwitchPattern::Expr(e) => {
-                                self.output.push_str("case ");
-                                self.emit_expr(e);
-                                self.emit_line(":");
+                let has_range = arms.iter().any(|arm| {
+                    arm.patterns.iter().any(|p| matches!(p, SwitchPattern::Range(..)))
+                });
+                if has_range {
+                    self.output.push_str("/* switch */ { ");
+                    self.output.push_str("int _sw_val = (");
+                    self.emit_expr(expr);
+                    self.output.push_str("); ");
+                    for (ai, arm) in arms.iter().enumerate() {
+                        if ai > 0 { self.output.push_str(" else "); }
+                        self.output.push_str("if (");
+                        for (pi, pat) in arm.patterns.iter().enumerate() {
+                            if pi > 0 { self.output.push_str(" || "); }
+                            match pat {
+                                SwitchPattern::Expr(e) => {
+                                    self.output.push_str("_sw_val == (");
+                                    self.emit_expr(e);
+                                    self.output.push(')');
+                                }
+                                SwitchPattern::Range(start, end) => {
+                                    self.output.push_str("(_sw_val >= ");
+                                    self.emit_expr(start);
+                                    self.output.push_str(" && _sw_val <= ");
+                                    self.emit_expr(end);
+                                    self.output.push(')');
+                                }
+                                SwitchPattern::Else => {}
                             }
-                            SwitchPattern::Range(start, end) => {
-                                // C doesn't support ranges, emit fallthrough cases
-                                // This is a simplification
-                                self.output.push_str("/* range ");
-                                self.emit_expr(start);
-                                self.output.push_str(" .. ");
-                                self.emit_expr(end);
-                                self.emit_line(" */");
+                        }
+                        self.output.push_str(") ");
+                        self.emit_block_as_stmt(&arm.body);
+                    }
+                    if let Some(eb) = else_arm {
+                        self.output.push_str(" else ");
+                        self.emit_block_as_stmt(eb);
+                    }
+                    self.output.push_str(" }");
+                } else {
+                    self.output.push_str("switch (");
+                    self.emit_expr(expr);
+                    self.output.push_str(") {");
+                    for arm in arms {
+                        for pat in &arm.patterns {
+                            match pat {
+                                SwitchPattern::Expr(e) => {
+                                    self.output.push_str("case ");
+                                    self.emit_expr(e);
+                                    self.emit_line(":");
+                                }
+                                _ => {}
                             }
-                            SwitchPattern::Else => {}
+                        }
+                        for stmt in &arm.body.stmts {
+                            self.emit_stmt(stmt);
                         }
                     }
-                    for stmt in &arm.body.stmts {
-                        self.emit_stmt(stmt);
+                    if let Some(else_block) = else_arm {
+                        self.emit_line("default:");
+                        for stmt in &else_block.stmts {
+                            self.emit_stmt(stmt);
+                        }
                     }
+                    self.emit_line("}");
                 }
-                if let Some(else_block) = else_arm {
-                    self.emit_line("default:");
-                    for stmt in &else_block.stmts {
-                        self.emit_stmt(stmt);
-                    }
-                }
-                self.emit_line("}");
             }
             Expr::Unary(op, inner) => {
                 match op {
@@ -601,7 +784,10 @@ impl CBackend {
                 }
                 self.output.push_str("] */");
             }
-            Expr::StructInit(_, fields) => {
+            Expr::StructInit(name, fields) => {
+                self.output.push('(');
+                self.output.push_str(name);
+                self.output.push(')');
                 self.output.push('{');
                 for (i, (_, val)) in fields.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }

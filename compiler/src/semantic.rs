@@ -456,12 +456,11 @@ impl SemanticAnalyzer {
                 }
             }
 
-            Expr::Field(obj, _field) => {
+            Expr::Field(obj, field_name) => {
                 let obj_type = self.type_of_expr(obj);
                 match obj_type {
                     Some(TypeVal::Struct(fields)) => {
-                        // Look up field type - for now return void
-                        fields.first().map(|(_, t)| t.clone())
+                        fields.iter().find(|(n, _)| n == field_name).map(|(_, t)| t.clone())
                     }
                     _ => None,
                 }

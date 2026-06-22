@@ -1074,7 +1074,9 @@ impl Parser {
     // for expr |item, index| block
     fn parse_for_expr(&mut self) -> Expr {
         self.skip(); // for
-        let iterable = self.parse_expr();
+        // Parse the iterable expression at a precedence below bitwise OR/AND/logical OR
+        // to avoid conflict with the |item| capture syntax
+        let iterable = self.parse_bit_xor();
         self.expect(TokenKind::Pipe);
         let item = self.expect_ident();
         let index = if *self.peek() == TokenKind::Comma {

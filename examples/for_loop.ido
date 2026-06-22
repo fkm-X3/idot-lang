@@ -1,0 +1,8 @@
+fn main() -> i32 {
+    const s := "hello";
+    var sum: i32 = 0;
+    for s |c| {
+        sum = sum + c;
+    }
+    return sum;
+}

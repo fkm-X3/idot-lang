@@ -27,17 +27,13 @@ cd my_project && matrix build && matrix run
 ## Examples
 
 | File | Compiles | Runs | Shows |
-|---|---|---|---|
+|---|---|---|---|---|
 | `hello.ido` | yes | exit 0 | Minimal program |
 | `fib.ido` | yes | exit 55 | Functions, recursion, const inference |
 | `math.ido` | yes | exit 61 | Arithmetic, function composition |
 | `control_flow.ido` | yes | exit 333 | if/else, while loops |
 | `types.ido` | yes | exit 181 | Variables, type inference, assignment |
-| `structs.ido` | yes* | codegen pending | Struct types, field access, literals |
-
-\* structs.ido parses and passes semantic analysis; C codegen for user-defined
-  struct types is not yet implemented (the C backend currently only handles
-  built-in scalar types).
+| `structs.ido` | yes | exit 32 | Struct types, field access, literals |
 
 ## Language Tour
 
@@ -154,16 +150,18 @@ idot/
 
 ## Status
 
-Early prototype. The compiler lexes, parses, semantically analyzes,
-and emits C code for a substantial subset of the language. The C backend is
-functional for scalar types, arithmetic, control flow, and functions; struct,
-enum, and union codegen are still in progress.
+Working prototype. The compiler lexes, parses, semantically analyzes,
+and emits working C code for a substantial subset of the language:
+primitives, variables, functions, control flow (`if`/`while`/`for`/`switch`),
+and user-defined struct types with field access and compound literals.
+Enum and union codegen are in progress; the package manager supports
+`new`, `build`, `run`, and `test` commands.
 
 ## Roadmap
 
 - **Part 1** (done): Lexer, parser, C backend, CLI, package manager
-- **Part 2** (in progress): Semantic analyzer, type inference, type checking
-- **Part 3**: Standard library, imports/resolution, more codegen features
+- **Part 2** (done): Semantic analyzer, type inference, type checking, struct codegen
+- **Part 3** (in progress): Standard library, imports/resolution, enum/union codegen
 - **Part 4**: Self-hosting — rewrite compiler in Idot
 
 ## License
