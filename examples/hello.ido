@@ -1,8 +1,0 @@
-// Hello, World!
-//
-// compile: idot compile examples/hello.idot
-// run:     ./examples/hello
-
-fn main() -> i32 {
-    return 0;
-}
