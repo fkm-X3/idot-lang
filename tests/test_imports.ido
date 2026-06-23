@@ -1,0 +1,6 @@
+import "helper";
+
+fn main() -> i32 {
+    let result: i32 = add(10, 20);
+    return result;
+}

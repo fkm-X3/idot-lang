@@ -1,0 +1,10 @@
+fn max[T: type](a: T, b: T) -> T {
+    if a > b { return a; } else { return b; }
+}
+
+fn main() -> i32 {
+    let a: i32 = 10;
+    let b: i32 = 20;
+    let m: i32 = max(a, b);
+    return m;
+}
