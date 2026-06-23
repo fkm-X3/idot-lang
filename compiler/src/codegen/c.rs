@@ -56,7 +56,7 @@ impl CBackend {
                 Decl::Fn(f) if !f.is_extern => {
                     self.emit_fn_def(f);
                 }
-                Decl::Var(v) => {
+                Decl::Let(v) => {
                     self.emit_global_var(v);
                 }
                 Decl::Const(c) => {
@@ -398,7 +398,7 @@ impl CBackend {
         match stmt {
             Stmt::Decl(decl) => match decl {
                 Decl::Fn(f) => self.emit_fn_def(f),
-                Decl::Var(v) => {
+                Decl::Let(v) => {
                     if let Some(tv) = &v.resolved_type {
                         self.var_types.insert(v.name.clone(), tv.clone());
                     }
@@ -462,19 +462,6 @@ impl CBackend {
                 self.emit_indent();
                 self.emit_line("continue;");
             }
-            Stmt::Defer(expr) => {
-                // Defer is complex in C. For Phase 1, we emit a comment
-                self.emit_indent();
-                self.output.push_str("/* defer: ");
-                self.emit_expr(expr);
-                self.emit_line(" */");
-            }
-            Stmt::Errdefer(expr) => {
-                self.emit_indent();
-                self.output.push_str("/* errdefer: ");
-                self.emit_expr(expr);
-                self.emit_line(" */");
-            }
         }
     }
 
@@ -513,7 +500,6 @@ impl CBackend {
             }
             Expr::BoolLit(b) => self.output.push_str(if *b { "true" } else { "false" }),
             Expr::NullLit => self.output.push_str("NULL"),
-            Expr::Undefined => self.output.push_str("0"), // best effort
             Expr::Ident(name) => self.output.push_str(name),
             Expr::Block(block) => {
                 self.emit_line(" {");
@@ -643,9 +629,9 @@ impl CBackend {
                 self.output.push_str(") ");
                 self.emit_block_as_stmt(body);
             }
-            Expr::Switch(expr, arms, else_arm) => {
+            Expr::Match(expr, arms, wildcard_arm) => {
                 let has_range = arms.iter().any(|arm| {
-                    arm.patterns.iter().any(|p| matches!(p, SwitchPattern::Range(..)))
+                    arm.patterns.iter().any(|p| matches!(p, MatchPattern::Range(..)))
                 });
                 if has_range {
                     self.output.push_str("/* switch */ { ");
@@ -658,25 +644,25 @@ impl CBackend {
                         for (pi, pat) in arm.patterns.iter().enumerate() {
                             if pi > 0 { self.output.push_str(" || "); }
                             match pat {
-                                SwitchPattern::Expr(e) => {
+                                MatchPattern::Expr(e) => {
                                     self.output.push_str("_sw_val == (");
                                     self.emit_expr(e);
                                     self.output.push(')');
                                 }
-                                SwitchPattern::Range(start, end) => {
+                                MatchPattern::Range(start, end) => {
                                     self.output.push_str("(_sw_val >= ");
                                     self.emit_expr(start);
                                     self.output.push_str(" && _sw_val <= ");
                                     self.emit_expr(end);
                                     self.output.push(')');
                                 }
-                                SwitchPattern::Else => {}
+                                MatchPattern::Wildcard => {}
                             }
                         }
                         self.output.push_str(") ");
                         self.emit_block_as_stmt(&arm.body);
                     }
-                    if let Some(eb) = else_arm {
+                    if let Some(eb) = wildcard_arm {
                         self.output.push_str(" else ");
                         self.emit_block_as_stmt(eb);
                     }
@@ -688,7 +674,7 @@ impl CBackend {
                     for arm in arms {
                         for pat in &arm.patterns {
                             match pat {
-                                SwitchPattern::Expr(e) => {
+                                MatchPattern::Expr(e) => {
                                     self.output.push_str("case ");
                                     self.emit_expr(e);
                                     self.emit_line(":");
@@ -700,7 +686,7 @@ impl CBackend {
                             self.emit_stmt(stmt);
                         }
                     }
-                    if let Some(else_block) = else_arm {
+                    if let Some(else_block) = wildcard_arm {
                         self.emit_line("default:");
                         for stmt in &else_block.stmts {
                             self.emit_stmt(stmt);
@@ -802,35 +788,6 @@ impl CBackend {
                     self.emit_expr(item);
                 }
                 self.output.push('}');
-            }
-            Expr::Try(inner) => {
-                // try expr: if it fails, return the error
-                self.output.push_str("/* try */ (");
-                self.emit_expr(inner);
-                self.output.push(')');
-            }
-            Expr::Catch(inner, var, _block) => {
-                self.output.push_str("/* catch ");
-                if let Some(v) = var {
-                    self.output.push_str(v);
-                }
-                self.output.push_str(" */ ");
-                self.emit_expr(inner);
-            }
-            Expr::Comptime(block) => {
-                self.output.push_str("/* comptime */ ");
-                self.emit_block_as_stmt(block);
-            }
-            Expr::When(cond, then_block, else_block) => {
-                // when is compile-time, but for C backend we emit a regular if
-                self.output.push_str("if (");
-                self.emit_expr(cond);
-                self.output.push_str(") ");
-                self.emit_block_as_stmt(then_block);
-                if let Some(eb) = else_block {
-                    self.output.push_str(" else ");
-                    self.emit_block_as_stmt(eb);
-                }
             }
         }
     }

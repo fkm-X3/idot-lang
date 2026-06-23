@@ -40,14 +40,13 @@ pub enum FloatSize {
 
 #[derive(Debug, Clone)]
 pub enum Decl {
-    Var(VarDecl),
+    Let(VarDecl),
     Const(ConstDecl),
     Fn(FnDecl),
     Struct(StructDecl),
     Enum(EnumDecl),
     Union(UnionDecl),
     Import(ImportDecl),
-    Foreign(ForeignDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -125,13 +124,6 @@ pub struct ImportDecl {
     pub path: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ForeignDecl {
-    pub lib_name: String,
-    pub lib_path: Option<String>,
-    pub declarations: Vec<Decl>,
-}
-
 // === TYPES ===
 
 #[derive(Debug, Clone)]
@@ -160,13 +152,12 @@ pub enum Expr {
     BoolLit(bool),
     NullLit,
     Ident(String),
-    Undefined,
 
     Block(Block),
     If(Box<Expr>, Block, Option<Box<Expr>>),
     For(Box<Expr>, Option<String>, Option<String>, Block),
     While(Box<Expr>, Block),
-    Switch(Box<Expr>, Vec<SwitchArm>, Option<Block>),
+    Match(Box<Expr>, Vec<MatchArm>, Option<Block>),
 
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
@@ -179,25 +170,19 @@ pub enum Expr {
 
     StructInit(String, Vec<(String, Expr)>),
     ArrayLit(Vec<Expr>),
-
-    Try(Box<Expr>),
-    Catch(Box<Expr>, Option<String>, Block),
-
-    Comptime(Block),
-    When(Box<Expr>, Block, Option<Block>),
 }
 
 #[derive(Debug, Clone)]
-pub struct SwitchArm {
-    pub patterns: Vec<SwitchPattern>,
+pub struct MatchArm {
+    pub patterns: Vec<MatchPattern>,
     pub body: Block,
 }
 
 #[derive(Debug, Clone)]
-pub enum SwitchPattern {
+pub enum MatchPattern {
     Expr(Expr),
     Range(Expr, Expr),
-    Else,
+    Wildcard,
 }
 
 #[derive(Debug, Clone)]
@@ -218,8 +203,6 @@ pub enum Stmt {
     Return(Option<Expr>),
     Break,
     Continue,
-    Defer(Expr),
-    Errdefer(Expr),
 }
 
 #[derive(Debug, Clone)]

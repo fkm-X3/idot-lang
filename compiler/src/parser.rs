@@ -71,7 +71,6 @@ impl Parser {
     fn parse_decl(&mut self) -> Decl {
         match self.peek() {
             TokenKind::Import => self.parse_import(),
-            TokenKind::Foreign => self.parse_foreign(),
             TokenKind::Extern => self.parse_extern(),
             TokenKind::Pub => {
                 self.skip();
@@ -79,22 +78,10 @@ impl Parser {
             }
             TokenKind::Fn => self.parse_fn_decl(false),
             TokenKind::Const => self.parse_const_decl(),
+            TokenKind::Let => self.parse_let_decl(),
             TokenKind::Struct => self.parse_struct_decl(),
             TokenKind::Enum => self.parse_enum_decl(),
             TokenKind::Union => self.parse_union_decl(),
-            TokenKind::Var => self.parse_var_decl(),
-            // Odin-style constant: ident "::" expr
-            TokenKind::Ident(_) if self.peek_n(1) == &TokenKind::ColonColon => {
-                self.parse_odin_const()
-            }
-            // Variable with type: ident ":" type "=" ...
-            TokenKind::Ident(_) if self.peek_n(1) == &TokenKind::Colon => {
-                self.parse_var_decl_typed()
-            }
-            // Variable with inference: ident ":=" expr
-            TokenKind::Ident(_) if self.peek_n(1) == &TokenKind::ColonEq => {
-                self.parse_var_decl_inferred()
-            }
             _ => panic!("Unexpected token {:?} at start of declaration", self.peek()),
         }
     }
@@ -109,10 +96,11 @@ impl Parser {
                 decl
             }
             TokenKind::Const => self.parse_const_decl(),
+            TokenKind::Let => self.parse_let_decl(),
             TokenKind::Struct => self.parse_struct_decl(),
             TokenKind::Enum => self.parse_enum_decl(),
             TokenKind::Union => self.parse_union_decl(),
-            _ => unexpected_token!(self, "fn, const, struct, enum, or union after pub"),
+            _ => unexpected_token!(self, "fn, const, let, struct, enum, or union after pub"),
         }
     }
 
@@ -130,43 +118,6 @@ impl Parser {
         };
         self.expect(TokenKind::Semicolon);
         Decl::Import(ImportDecl { path })
-    }
-
-    // === Foreign ===
-    // foreign import ident string ";"
-    // foreign ident "{" decl* "}"
-    fn parse_foreign(&mut self) -> Decl {
-        self.skip(); // foreign
-        if *self.peek() == TokenKind::Import {
-            self.skip(); // import
-            let name = self.expect_ident();
-            let path = match self.peek() {
-                TokenKind::StrLit(s) => {
-                    let s = s.clone();
-                    self.skip();
-                    Some(s)
-                }
-                _ => None,
-            };
-            self.expect(TokenKind::Semicolon);
-            return Decl::Foreign(ForeignDecl {
-                lib_name: name,
-                lib_path: path,
-                declarations: vec![],
-            });
-        }
-        let name = self.expect_ident();
-        self.expect(TokenKind::LBrace);
-        let mut decls = Vec::new();
-        while *self.peek() != TokenKind::RBrace && *self.peek() != TokenKind::Eof {
-            decls.push(self.parse_extern_decl());
-        }
-        self.expect(TokenKind::RBrace);
-        Decl::Foreign(ForeignDecl {
-            lib_name: name,
-            lib_path: None,
-            declarations: decls,
-        })
     }
 
     // === Extern ===
@@ -252,8 +203,35 @@ impl Parser {
         params
     }
 
+    // === Let Declaration ===
+    // "let" ["mut"] ident (":" type)? ("=" expr)? ";"
+    fn parse_let_decl(&mut self) -> Decl {
+        self.skip(); // let
+        let mutable = if *self.peek() == TokenKind::Mut {
+            self.skip();
+            true
+        } else {
+            false
+        };
+        let name = self.expect_ident();
+        let type_ = if *self.peek() == TokenKind::Colon {
+            self.skip();
+            Some(self.parse_type())
+        } else {
+            None
+        };
+        let init = if *self.peek() == TokenKind::Eq {
+            self.skip();
+            Some(self.parse_expr())
+        } else {
+            None
+        };
+        self.expect(TokenKind::Semicolon);
+        Decl::Let(VarDecl { name, mutable, type_, init, resolved_type: None })
+    }
+
     // === Const Declaration ===
-    // "const" ident (":" type)? ("=" | ":=") expr ";"
+    // "const" ident (":" type)? "=" expr ";"
     fn parse_const_decl(&mut self) -> Decl {
         self.skip(); // const
         let name = self.expect_ident();
@@ -263,120 +241,10 @@ impl Parser {
         } else {
             None
         };
-
-        // Handle `const ident := expr` (inferred const)
-        if *self.peek() == TokenKind::ColonEq {
-            self.skip();
-            let init = self.parse_expr();
-            self.expect(TokenKind::Semicolon);
-            return Decl::Const(ConstDecl { name, type_: None, init, resolved_type: None });
-        }
-
         self.expect(TokenKind::Eq);
         let init = self.parse_expr();
         self.expect(TokenKind::Semicolon);
         Decl::Const(ConstDecl { name, type_, init, resolved_type: None })
-    }
-
-    // Odin-style: ident "::" expr ";"
-    fn parse_odin_const(&mut self) -> Decl {
-        let name = self.expect_ident();
-        self.skip(); // ::
-
-        // Check for type declarations: ident :: struct/enum/union { }
-        match self.peek() {
-            TokenKind::Struct => {
-                self.skip();
-                self.expect(TokenKind::LBrace);
-                let fields = self.parse_struct_fields();
-                self.expect(TokenKind::RBrace);
-                return Decl::Struct(StructDecl { name, fields });
-            }
-            TokenKind::Enum => {
-                self.skip();
-                let backing_type = if *self.peek() == TokenKind::LParen {
-                    self.skip();
-                    let t = self.parse_type();
-                    self.expect(TokenKind::RParen);
-                    Some(t)
-                } else {
-                    None
-                };
-                self.expect(TokenKind::LBrace);
-                let mut variants = Vec::new();
-                while *self.peek() != TokenKind::RBrace && *self.peek() != TokenKind::Eof {
-                    let vname = self.expect_ident();
-                    let value = if *self.peek() == TokenKind::Eq {
-                        self.skip();
-                        Some(self.parse_expr())
-                    } else {
-                        None
-                    };
-                    variants.push(EnumVariant { name: vname, value });
-                    if *self.peek() == TokenKind::Comma {
-                        self.skip();
-                    }
-                }
-                self.expect(TokenKind::RBrace);
-                return Decl::Enum(EnumDecl { name, backing_type, variants });
-            }
-            TokenKind::Union => {
-                self.skip();
-                let tagged = if *self.peek() == TokenKind::LParen
-                    && self.peek_n(1) == &TokenKind::Enum
-                {
-                    self.skip();
-                    self.skip();
-                    self.expect(TokenKind::RParen);
-                    true
-                } else {
-                    false
-                };
-                self.expect(TokenKind::LBrace);
-                let fields = self.parse_struct_fields();
-                self.expect(TokenKind::RBrace);
-                return Decl::Union(UnionDecl { name, tagged, fields });
-            }
-            _ => {}
-        }
-
-        let init = self.parse_expr();
-        self.expect(TokenKind::Semicolon);
-        Decl::Const(ConstDecl { name, type_: None, init, resolved_type: None })
-    }
-
-    // === Var Declaration ===
-    // "var"? ident ":" type ("=" expr)? ";"
-    fn parse_var_decl(&mut self) -> Decl {
-        self.skip(); // var
-        self.parse_var_decl_typed_mut(true)
-    }
-
-    fn parse_var_decl_typed(&mut self) -> Decl {
-        self.parse_var_decl_typed_mut(true)
-    }
-
-    fn parse_var_decl_typed_mut(&mut self, mutable: bool) -> Decl {
-        let name = self.expect_ident();
-        self.expect(TokenKind::Colon);
-        let type_ = self.parse_type();
-        let init = if *self.peek() == TokenKind::Eq {
-            self.skip();
-            Some(self.parse_expr())
-        } else {
-            None
-        };
-        self.expect(TokenKind::Semicolon);
-        Decl::Var(VarDecl { name, mutable, type_: Some(type_), init, resolved_type: None })
-    }
-
-    // ident ":=" expr ";"
-    fn parse_var_decl_inferred(&mut self) -> Decl {
-        let name = self.expect_ident();
-        self.skip(); // :=
-        let init = Some(self.parse_expr());
-        self.expect(TokenKind::Semicolon);
-        Decl::Var(VarDecl { name, mutable: true, type_: None, init, resolved_type: None })
     }
 
     // === Struct Declaration ===
@@ -415,21 +283,10 @@ impl Parser {
     }
 
     // === Enum Declaration ===
-    // ident "::"? "enum" ("(" type ")")? "{" variant_list "}"
+    // "enum" ident ("(" type ")")? "{" variant_list "}"
     fn parse_enum_decl(&mut self) -> Decl {
-        let name = if matches!(self.peek(), TokenKind::Ident(_)) {
-            let n = self.expect_ident();
-            if *self.peek() == TokenKind::ColonColon {
-                self.skip();
-            }
-            n
-        } else {
-            self.skip(); // enum
-            String::new()
-        };
-        if *self.peek() == TokenKind::Enum {
-            self.skip();
-        }
+        self.skip(); // enum
+        let name = self.expect_ident();
         let backing_type = if *self.peek() == TokenKind::LParen {
             self.skip(); // (
             let t = self.parse_type();
@@ -458,20 +315,10 @@ impl Parser {
     }
 
     // === Union Declaration ===
+    // "union" ident ("(enum)")? "{" field_list "}"
     fn parse_union_decl(&mut self) -> Decl {
-        let name = if matches!(self.peek(), TokenKind::Ident(_)) {
-            let n = self.expect_ident();
-            if *self.peek() == TokenKind::ColonColon {
-                self.skip();
-            }
-            n
-        } else {
-            self.skip(); // union
-            String::new()
-        };
-        if *self.peek() == TokenKind::Union {
-            self.skip();
-        }
+        self.skip(); // union
+        let name = self.expect_ident();
         let tagged = if *self.peek() == TokenKind::LParen && self.peek_n(1) == &TokenKind::Enum {
             self.skip(); self.skip(); // ( enum
             self.expect(TokenKind::RParen);
@@ -580,31 +427,11 @@ impl Parser {
 
     // Assignment: lhs = rhs
     fn parse_assign(&mut self) -> Expr {
-        let lhs = self.parse_catch();
+        let lhs = self.parse_or();
         if *self.peek() == TokenKind::Eq {
             self.skip();
             let rhs = self.parse_assign();
             Expr::Assign(Box::new(lhs), Box::new(rhs))
-        } else {
-            lhs
-        }
-    }
-
-    // Catch: lhs catch |err| { ... }
-    fn parse_catch(&mut self) -> Expr {
-        let lhs = self.parse_or();
-        if *self.peek() == TokenKind::Catch {
-            self.skip();
-            let var = if *self.peek() == TokenKind::Pipe {
-                self.skip();
-                let v = self.expect_ident();
-                self.expect(TokenKind::Pipe);
-                Some(v)
-            } else {
-                None
-            };
-            let body = self.parse_block();
-            Expr::Catch(Box::new(lhs), var, body)
         } else {
             lhs
         }
@@ -748,7 +575,7 @@ impl Parser {
         left
     }
 
-    // Unary: -x, !x, &x, *x, try x
+    // Unary: -x, !x, &x, *x
     fn parse_unary(&mut self) -> Expr {
         match self.peek() {
             TokenKind::Minus => {
@@ -766,10 +593,6 @@ impl Parser {
             TokenKind::Star => {
                 self.skip();
                 Expr::Unary(UnOp::Deref, Box::new(self.parse_unary()))
-            }
-            TokenKind::Try => {
-                self.skip();
-                Expr::Try(Box::new(self.parse_unary()))
             }
             _ => self.parse_postfix(),
         }
@@ -871,7 +694,6 @@ impl Parser {
             TokenKind::True => { self.skip(); Expr::BoolLit(true) }
             TokenKind::False => { self.skip(); Expr::BoolLit(false) }
             TokenKind::Null => { self.skip(); Expr::NullLit }
-            TokenKind::Undefined => { self.skip(); Expr::Undefined }
 
             TokenKind::Ident(s) => {
                 let name = s.clone();
@@ -915,9 +737,7 @@ impl Parser {
             TokenKind::If => self.parse_if_expr(),
             TokenKind::For => self.parse_for_expr(),
             TokenKind::While => self.parse_while_expr(),
-            TokenKind::Switch => self.parse_switch_expr(),
-            TokenKind::Comptime => self.parse_comptime_expr(),
-            TokenKind::When => self.parse_when_expr(),
+            TokenKind::Match => self.parse_match_expr(),
 
             _ => unexpected_token!(self, "expression"),
         }
@@ -939,35 +759,13 @@ impl Parser {
             // Declaration statements
             TokenKind::Fn
             | TokenKind::Const
+            | TokenKind::Let
             | TokenKind::Struct
             | TokenKind::Enum
             | TokenKind::Union
             | TokenKind::Import
-            | TokenKind::Foreign
             | TokenKind::Extern
-            | TokenKind::Var
             | TokenKind::Pub => Stmt::Decl(self.parse_decl()),
-
-            // Ident could be a declaration (ident: type, ident ::, ident :=)
-            TokenKind::Ident(_) => {
-                // Peek ahead to check if this is a declaration or expression
-                if self.peek_n(1) == &TokenKind::ColonColon {
-                    // Odin const: ident :: expr
-                    return Stmt::Decl(self.parse_decl());
-                }
-                if self.peek_n(1) == &TokenKind::Colon {
-                    // Could be var decl with type or expression
-                    return Stmt::Decl(self.parse_decl());
-                }
-                if self.peek_n(1) == &TokenKind::ColonEq {
-                    // Inferred var: ident := expr
-                    return Stmt::Decl(self.parse_decl());
-                }
-                // Expression statement
-                let expr = self.parse_expr();
-                self.expect(TokenKind::Semicolon);
-                Stmt::Expr(expr)
-            }
 
             // Control flow keywords as statements
             TokenKind::If => {
@@ -982,8 +780,8 @@ impl Parser {
                 let expr = self.parse_while_expr();
                 Stmt::Expr(expr)
             }
-            TokenKind::Switch => {
-                let expr = self.parse_switch_expr();
+            TokenKind::Match => {
+                let expr = self.parse_match_expr();
                 Stmt::Expr(expr)
             }
 
@@ -1009,30 +807,6 @@ impl Parser {
                 self.skip();
                 self.expect(TokenKind::Semicolon);
                 Stmt::Continue
-            }
-
-            // Defer / errdefer
-            TokenKind::Defer => {
-                self.skip();
-                let expr = self.parse_expr();
-                self.expect(TokenKind::Semicolon);
-                Stmt::Defer(expr)
-            }
-            TokenKind::Errdefer => {
-                self.skip();
-                let expr = self.parse_expr();
-                self.expect(TokenKind::Semicolon);
-                Stmt::Errdefer(expr)
-            }
-
-            // Comptime / when as statements
-            TokenKind::Comptime => {
-                let expr = self.parse_comptime_expr();
-                Stmt::Expr(expr)
-            }
-            TokenKind::When => {
-                let expr = self.parse_when_expr();
-                Stmt::Expr(expr)
             }
 
             // Blocks are expression statements
@@ -1070,24 +844,23 @@ impl Parser {
     }
 
     // === For Expression ===
-    // for expr |item| block
-    // for expr |item, index| block
+    // for item in expr block
     fn parse_for_expr(&mut self) -> Expr {
         self.skip(); // for
-        // Parse the iterable expression at a precedence below bitwise OR/AND/logical OR
-        // to avoid conflict with the |item| capture syntax
-        let iterable = self.parse_bit_xor();
-        self.expect(TokenKind::Pipe);
         let item = self.expect_ident();
-        let index = if *self.peek() == TokenKind::Comma {
-            self.skip();
-            Some(self.expect_ident())
+        self.expect(TokenKind::In);
+        // Parse iterable expression, but don't let parse_primary consume
+        // a following { as a struct init — it belongs to the for loop body.
+        let iterable = if matches!(self.peek(), TokenKind::Ident(_))
+            && self.peek_n(1) == &TokenKind::LBrace
+        {
+            let name = self.expect_ident();
+            Expr::Ident(name)
         } else {
-            None
+            self.parse_expr()
         };
-        self.expect(TokenKind::Pipe);
         let body = self.parse_block();
-        Expr::For(Box::new(iterable), Some(item), index, body)
+        Expr::For(Box::new(iterable), Some(item), None, body)
     }
 
     // === While Expression ===
@@ -1099,42 +872,41 @@ impl Parser {
         Expr::While(Box::new(cond), body)
     }
 
-    // === Switch Expression ===
-    // switch expr "{" (pattern "=>" block (",")?)* "}"
-    fn parse_switch_expr(&mut self) -> Expr {
-        self.skip(); // switch
+    // === Match Expression ===
+    // match expr "{" (pattern "=>" block (",")?)* "}"
+    fn parse_match_expr(&mut self) -> Expr {
+        self.skip(); // match
         let expr = self.parse_expr();
         self.expect(TokenKind::LBrace);
         let mut arms = Vec::new();
-        let mut else_arm = None;
+        let mut wildcard_arm = None;
         while *self.peek() != TokenKind::RBrace && *self.peek() != TokenKind::Eof {
-            if *self.peek() == TokenKind::Else {
+            if matches!(self.peek(), TokenKind::Underscore) {
                 self.skip();
                 self.expect(TokenKind::FatArrow);
-                else_arm = Some(self.parse_block());
-                // Allow trailing comma
+                wildcard_arm = Some(self.parse_block());
                 if *self.peek() == TokenKind::Comma {
                     self.skip();
                 }
                 break;
             }
-            let patterns = self.parse_switch_patterns();
+            let patterns = self.parse_match_patterns();
             self.expect(TokenKind::FatArrow);
             let body = self.parse_block();
-            arms.push(SwitchArm { patterns, body });
+            arms.push(MatchArm { patterns, body });
             if *self.peek() == TokenKind::Comma {
                 self.skip();
             }
         }
         self.expect(TokenKind::RBrace);
-        Expr::Switch(Box::new(expr), arms, else_arm)
+        Expr::Match(Box::new(expr), arms, wildcard_arm)
     }
 
-    fn parse_switch_patterns(&mut self) -> Vec<SwitchPattern> {
+    fn parse_match_patterns(&mut self) -> Vec<MatchPattern> {
         let mut patterns = Vec::new();
         loop {
-            let pattern = if *self.peek() == TokenKind::Else {
-                patterns.push(SwitchPattern::Else);
+            let pattern = if matches!(self.peek(), TokenKind::Underscore) {
+                patterns.push(MatchPattern::Wildcard);
                 return patterns;
             } else {
                 self.parse_pattern()
@@ -1152,38 +924,15 @@ impl Parser {
         patterns
     }
 
-    fn parse_pattern(&mut self) -> SwitchPattern {
+    fn parse_pattern(&mut self) -> MatchPattern {
         let start = self.parse_expr();
         if *self.peek() == TokenKind::DotDot || *self.peek() == TokenKind::DotDotEq {
             self.skip();
             let end = self.parse_expr();
-            SwitchPattern::Range(start, end)
+            MatchPattern::Range(start, end)
         } else {
-            SwitchPattern::Expr(start)
+            MatchPattern::Expr(start)
         }
-    }
-
-    // === Comptime ===
-    // comptime block
-    fn parse_comptime_expr(&mut self) -> Expr {
-        self.skip(); // comptime
-        let block = self.parse_block();
-        Expr::Comptime(block)
-    }
-
-    // === When ===
-    // when cond block ("else" block)?
-    fn parse_when_expr(&mut self) -> Expr {
-        self.skip(); // when
-        let cond = self.parse_expr();
-        let then_block = self.parse_block();
-        let else_block = if *self.peek() == TokenKind::Else {
-            self.skip();
-            Some(self.parse_block())
-        } else {
-            None
-        };
-        Expr::When(Box::new(cond), then_block, else_block)
     }
 
     // === Helpers ===

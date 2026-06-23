@@ -154,7 +154,7 @@ impl SemanticAnalyzer {
                         TypeVal::Named(e.name.clone()),
                     );
                 }
-                Decl::Import(_) | Decl::Foreign(_) | Decl::Union(_) => {
+                Decl::Import(_) | Decl::Union(_) => {
                     // Not yet handled in semantic analysis
                 }
                 _ => {}
@@ -210,20 +210,12 @@ impl SemanticAnalyzer {
                 None
             }
             Stmt::Break | Stmt::Continue => None,
-            Stmt::Defer(expr) => {
-                self.type_of_expr(expr);
-                None
-            }
-            Stmt::Errdefer(expr) => {
-                self.type_of_expr(expr);
-                None
-            }
         }
     }
 
     fn analyze_decl(&mut self, decl: &mut Decl) -> Option<TypeVal> {
         match decl {
-            Decl::Var(v) => {
+            Decl::Let(v) => {
                 let declared = v
                     .type_
                     .as_ref()
@@ -301,7 +293,6 @@ impl SemanticAnalyzer {
             Expr::StrLit(_) => Some(TypeVal::Slice(Box::new(TypeVal::Int(IntSize::U8)))),
             Expr::CharLit(_) => Some(TypeVal::Int(IntSize::I32)),
             Expr::NullLit => Some(TypeVal::NullablePtr(Box::new(TypeVal::Void))),
-            Expr::Undefined => None,
 
             Expr::Ident(name) => self.lookup_type_val(name),
 
@@ -415,25 +406,25 @@ impl SemanticAnalyzer {
                 None
             }
 
-            Expr::Switch(expr, arms, else_arm) => {
+            Expr::Match(expr, arms, wildcard_arm) => {
                 self.type_of_expr(expr);
                 let mut result_type = None;
                 for arm in arms {
                     for pat in &mut arm.patterns {
                         match pat {
-                            SwitchPattern::Expr(e) => {
+                            MatchPattern::Expr(e) => {
                                 self.type_of_expr(e);
                             }
-                            SwitchPattern::Range(start, end) => {
+                            MatchPattern::Range(start, end) => {
                                 self.type_of_expr(start);
                                 self.type_of_expr(end);
                             }
-                            SwitchPattern::Else => {}
+                            MatchPattern::Wildcard => {}
                         }
                     }
                     result_type = self.analyze_block(&mut arm.body).or(result_type);
                 }
-                if let Some(block) = else_arm {
+                if let Some(block) = wildcard_arm {
                     result_type = self.analyze_block(block).or(result_type);
                 }
                 result_type
@@ -481,24 +472,6 @@ impl SemanticAnalyzer {
                 }
             }
 
-            Expr::Try(inner) => {
-                // try unwraps an error union
-                let inner_type = self.type_of_expr(inner);
-                match inner_type {
-                    Some(TypeVal::ErrorUnion(ok_type)) => Some(*ok_type),
-                    _ => inner_type,
-                }
-            }
-
-            Expr::Catch(inner, _var, block) => {
-                let inner_type = self.type_of_expr(inner);
-                let _block_type = self.analyze_block(block);
-                match inner_type {
-                    Some(TypeVal::ErrorUnion(ok_type)) => Some(*ok_type),
-                    t => t,
-                }
-            }
-
             Expr::StructInit(name, fields) => {
                 for (_, val) in fields.iter_mut() {
                     self.type_of_expr(val);
@@ -513,18 +486,6 @@ impl SemanticAnalyzer {
                     elem_type = self.type_of_expr(item).or(elem_type);
                 }
                 elem_type.map(|e| TypeVal::Slice(Box::new(e)))
-            }
-
-            Expr::Comptime(block) => {
-                self.analyze_block(block);
-                None
-            }
-
-            Expr::When(cond, then_block, else_block) => {
-                self.type_of_expr(cond);
-                let then_t = self.analyze_block(then_block);
-                let else_t = else_block.as_mut().and_then(|b| self.analyze_block(b));
-                then_t.or(else_t)
             }
         }
     }
