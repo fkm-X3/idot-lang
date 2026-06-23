@@ -9,9 +9,7 @@
 *.h text eol=lf diff=c
 
 # Idot source (syntax closest to Rust)
-examples/control_flow.idot linguist-language=Rust
-*.idot linguist-vendored=false
-*.idot linguist-generated=false
+*.idot linguist-language=Rust linguist-detectable=true linguist-vendored=false linguist-generated=false
 
 # Config / docs
 *.toml text eol=lf
