@@ -8,8 +8,8 @@
 *.c text eol=lf diff=c linguist-generated=true
 *.h text eol=lf diff=c
 
-# Idot source
-*.idot text eol=lf
+# Idot source (syntax closest to Rust)
+*.idot text eol=lf linguist-language=Rust
 
 # Config / docs
 *.toml text eol=lf
