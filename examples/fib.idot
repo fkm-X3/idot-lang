@@ -9,3 +9,4 @@ fn main() -> i32 {
     let result = fib(10);
     return result;
 }
+
