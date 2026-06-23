@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let mut x: i32 = 10;
+    let p: *i32 = &x;
+    p.* = 20;
+    return x;
+}

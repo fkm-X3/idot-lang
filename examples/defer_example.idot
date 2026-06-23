@@ -1,0 +1,8 @@
+fn main() -> i32 {
+    let mut result: i32 = 0;
+    defer {
+        result = result + 1;
+    }
+    result = result + 10;
+    return result;
+}

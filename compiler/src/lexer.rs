@@ -25,6 +25,11 @@ pub enum TokenKind {
     Null,
     Break,
     Continue,
+    Defer,
+    Errdefer,
+    Try,
+    Catch,
+    OrElse,
 
     // Literals
     IntLit(i64),
@@ -429,6 +434,11 @@ impl Lexer {
             "null" => TokenKind::Null,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "defer" => TokenKind::Defer,
+            "errdefer" => TokenKind::Errdefer,
+            "try" => TokenKind::Try,
+            "catch" => TokenKind::Catch,
+            "orelse" => TokenKind::OrElse,
             _ => TokenKind::Ident(s),
         }
     }

@@ -170,6 +170,10 @@ pub enum Expr {
 
     StructInit(String, Vec<(String, Expr)>),
     ArrayLit(Vec<Expr>),
+    Deref(Box<Expr>),                   // x.*  — postfix deref
+    Try(Box<Expr>),                     // try expr
+    Catch(Box<Expr>, Box<Expr>),        // catch expr handler
+    OrElse(Box<Expr>, Box<Expr>),       // opt orelse default
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +207,8 @@ pub enum Stmt {
     Return(Option<Expr>),
     Break,
     Continue,
+    Defer(Expr),       // defer expr;
+    Errdefer(Expr),    // errdefer expr;
 }
 
 #[derive(Debug, Clone)]

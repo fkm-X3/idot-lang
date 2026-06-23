@@ -210,6 +210,14 @@ impl SemanticAnalyzer {
                 None
             }
             Stmt::Break | Stmt::Continue => None,
+            Stmt::Defer(expr) => {
+                self.type_of_expr(expr);
+                None
+            }
+            Stmt::Errdefer(expr) => {
+                self.type_of_expr(expr);
+                None
+            }
         }
     }
 
@@ -478,6 +486,53 @@ impl SemanticAnalyzer {
                 }
                 // Look up struct type
                 Some(TypeVal::Named(name.clone()))
+            }
+
+            Expr::Deref(inner) => {
+                // x.*  — get the pointee type of a pointer
+                let inner_t = self.type_of_expr(inner);
+                match inner_t {
+                    Some(TypeVal::Ptr(t)) => Some(*t),
+                    Some(TypeVal::ConstPtr(t)) => Some(*t),
+                    Some(TypeVal::NullablePtr(t)) => Some(*t),
+                    Some(TypeVal::ManyPtr(t)) => Some(*t),
+                    _ => None,
+                }
+            }
+
+            Expr::Try(inner) => {
+                let inner_t = self.type_of_expr(inner);
+                match inner_t {
+                    Some(TypeVal::ErrorUnion(t)) => Some(*t),
+                    _ => {
+                        self.errors.push("'try' expression requires an error union type".into());
+                        None
+                    }
+                }
+            }
+
+            Expr::Catch(lhs, rhs) => {
+                let lhs_t = self.type_of_expr(lhs);
+                let rhs_t = self.type_of_expr(rhs);
+                // The catch result is the inner type of the error union
+                match lhs_t {
+                    Some(TypeVal::ErrorUnion(t)) => rhs_t.or(Some(*t)),
+                    _ => {
+                        self.errors.push("'catch' requires an error union expression".into());
+                        rhs_t
+                    }
+                }
+            }
+
+            Expr::OrElse(lhs, rhs) => {
+                let lhs_t = self.type_of_expr(lhs);
+                self.type_of_expr(rhs);
+                // The result is the inner type of the optional
+                match lhs_t {
+                    Some(TypeVal::Optional(t)) => Some(*t),
+                    Some(TypeVal::NullablePtr(t)) => Some(*t),
+                    _ => lhs_t,
+                }
             }
 
             Expr::ArrayLit(items) => {

@@ -427,7 +427,7 @@ impl Parser {
 
     // Assignment: lhs = rhs
     fn parse_assign(&mut self) -> Expr {
-        let lhs = self.parse_or();
+        let lhs = self.parse_catch_orelse();
         if *self.peek() == TokenKind::Eq {
             self.skip();
             let rhs = self.parse_assign();
@@ -435,6 +435,27 @@ impl Parser {
         } else {
             lhs
         }
+    }
+
+    // catch / orelse (lowest binary precedence)
+    fn parse_catch_orelse(&mut self) -> Expr {
+        let mut left = self.parse_or();
+        loop {
+            match self.peek() {
+                TokenKind::Catch => {
+                    self.skip();
+                    let right = self.parse_catch_orelse();
+                    left = Expr::Catch(Box::new(left), Box::new(right));
+                }
+                TokenKind::OrElse => {
+                    self.skip();
+                    let right = self.parse_catch_orelse();
+                    left = Expr::OrElse(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        left
     }
 
     // Logical OR: ||
@@ -575,7 +596,7 @@ impl Parser {
         left
     }
 
-    // Unary: -x, !x, &x, *x
+    // Unary: -x, !x, &x, *x, try x
     fn parse_unary(&mut self) -> Expr {
         match self.peek() {
             TokenKind::Minus => {
@@ -593,6 +614,10 @@ impl Parser {
             TokenKind::Star => {
                 self.skip();
                 Expr::Unary(UnOp::Deref, Box::new(self.parse_unary()))
+            }
+            TokenKind::Try => {
+                self.skip();
+                Expr::Try(Box::new(self.parse_unary()))
             }
             _ => self.parse_postfix(),
         }
@@ -655,11 +680,16 @@ impl Parser {
                         }
                     }
                 }
-                // Field access: expr.field
+                // Field access: expr.field or pointer deref: expr.*
                 TokenKind::Dot => {
                     self.skip();
-                    let field = self.expect_ident();
-                    left = Expr::Field(Box::new(left), field);
+                    if *self.peek() == TokenKind::Star {
+                        self.skip();
+                        left = Expr::Deref(Box::new(left));
+                    } else {
+                        let field = self.expect_ident();
+                        left = Expr::Field(Box::new(left), field);
+                    }
                 }
                 _ => break,
             }
@@ -783,6 +813,27 @@ impl Parser {
             TokenKind::Match => {
                 let expr = self.parse_match_expr();
                 Stmt::Expr(expr)
+            }
+
+            // Defer
+            TokenKind::Defer => {
+                self.skip();
+                let expr = self.parse_expr();
+                // Semicolon is optional after defer (like Go/Zig)
+                if *self.peek() == TokenKind::Semicolon {
+                    self.skip();
+                }
+                Stmt::Defer(expr)
+            }
+
+            // Errdefer
+            TokenKind::Errdefer => {
+                self.skip();
+                let expr = self.parse_expr();
+                if *self.peek() == TokenKind::Semicolon {
+                    self.skip();
+                }
+                Stmt::Errdefer(expr)
             }
 
             // Return

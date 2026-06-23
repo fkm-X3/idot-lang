@@ -6,7 +6,10 @@ pub struct CBackend {
     fn_decls: Vec<String>,
     emitted_types: std::collections::HashSet<String>,
     for_counter: usize,
+    try_counter: usize,
     var_types: std::collections::HashMap<String, TypeVal>,
+    defer_stack: Vec<Vec<String>>,   // per-scope deferred expressions
+    in_function: bool,
 }
 
 impl CBackend {
@@ -17,7 +20,10 @@ impl CBackend {
             fn_decls: Vec::new(),
             emitted_types: std::collections::HashSet::new(),
             for_counter: 0,
+            try_counter: 0,
             var_types: std::collections::HashMap::new(),
+            defer_stack: Vec::new(),
+            in_function: false,
         }
     }
 
@@ -334,22 +340,42 @@ impl CBackend {
         self.emit_fn_sig(f);
         self.emit_line(" {");
         self.indent += 1;
+        self.in_function = true;
+        self.defer_stack.push(Vec::new());
         if !f.body.stmts.is_empty() {
             for stmt in &f.body.stmts {
                 self.emit_stmt(stmt);
             }
         }
+        // If no explicit return, emit defers before implicit return
+        let has_explicit_return = f.body.stmts.iter().any(|s| matches!(s, Stmt::Return(_)));
+        if !has_explicit_return {
+            self.emit_pending_defers();
+        }
+        self.defer_stack.pop();
         // If void return and no return statement, add implicit return
         if f.return_type.is_none() || matches!(&f.return_type, Some(Type::Named(n)) if n == "void") {
-            // Check if last stmt is a return
             let has_return = f.body.stmts.iter().any(|s| matches!(s, Stmt::Return(_)));
             if !has_return {
                 self.emit_line("return;");
             }
         }
         self.indent -= 1;
+        self.in_function = false;
         self.emit_line("}");
         self.emit_line("");
+    }
+
+    fn emit_pending_defers(&mut self) {
+        let mut pending: Vec<String> = self.defer_stack.last()
+            .cloned()
+            .unwrap_or_default();
+        pending.reverse();
+        for expr_str in &pending {
+            self.emit_indent();
+            self.output.push_str(expr_str);
+            self.emit_line(";");
+        }
     }
 
     fn emit_global_var(&mut self, v: &VarDecl) {
@@ -403,7 +429,10 @@ impl CBackend {
                         self.var_types.insert(v.name.clone(), tv.clone());
                     }
                     self.emit_indent();
-                    if !v.mutable { self.output.push_str("const "); }
+                    if !v.mutable {
+                        let is_ptr = matches!(v.resolved_type, Some(TypeVal::Ptr(_)) | Some(TypeVal::NullablePtr(_)) | Some(TypeVal::ManyPtr(_)) | Some(TypeVal::ConstPtr(_)));
+                        if !is_ptr { self.output.push_str("const "); }
+                    }
                     if let Some(tv) = &v.resolved_type {
                         self.emit_type_val(tv);
                     } else if let Some(type_) = &v.type_ {
@@ -446,6 +475,7 @@ impl CBackend {
                 self.emit_line(";");
             }
             Stmt::Return(expr) => {
+                self.emit_pending_defers();
                 self.emit_indent();
                 self.output.push_str("return");
                 if let Some(e) = expr {
@@ -461,6 +491,22 @@ impl CBackend {
             Stmt::Continue => {
                 self.emit_indent();
                 self.emit_line("continue;");
+            }
+            Stmt::Defer(expr) => {
+                // Record the deferred expression to emit at scope exit
+                let mut be = CBackend::new();
+                be.emit_expr(expr);
+                if let Some(defers) = self.defer_stack.last_mut() {
+                    defers.push(be.output);
+                }
+            }
+            Stmt::Errdefer(expr) => {
+                // For now, errdefer acts like defer (simplified)
+                let mut be = CBackend::new();
+                be.emit_expr(expr);
+                if let Some(defers) = self.defer_stack.last_mut() {
+                    defers.push(be.output);
+                }
             }
         }
     }
@@ -789,6 +835,80 @@ impl CBackend {
                 }
                 self.output.push('}');
             }
+            Expr::Deref(inner) => {
+                // x.*  →  *x  (no parens so it remains a valid lvalue in C)
+                self.output.push('*');
+                self.emit_expr(inner);
+            }
+            Expr::Try(inner) => {
+                // try expr  →  { auto _tryN = (expr); if (_tryN.err) return _tryN.err; _tryN.data.val; }
+                let id = self.try_counter;
+                self.try_counter += 1;
+                self.output.push_str("({ auto _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(" = (");
+                self.emit_expr(inner);
+                self.output.push_str("); if (_try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(".err) { ");
+                self.emit_pending_defers();
+                self.output.push_str("return _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(".err; } _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(".data.val; })");
+            }
+            Expr::Catch(lhs, rhs) => {
+                // catch expr handler  →  ({ auto _tryN = (expr); _tryN.err ? (handler) : _tryN.data.val; })
+                let id = self.try_counter;
+                self.try_counter += 1;
+                self.output.push_str("({ auto _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(" = (");
+                self.emit_expr(lhs);
+                self.output.push_str("); _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(".err ? (");
+                self.emit_expr(rhs);
+                self.output.push_str(") : _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(".data.val; })");
+            }
+            Expr::OrElse(lhs, rhs) => {
+                // opt orelse default
+                let id = self.try_counter;
+                self.try_counter += 1;
+                self.output.push_str("({ auto _try");
+                self.output.push_str(&id.to_string());
+                self.output.push_str(" = (");
+                self.emit_expr(lhs);
+                self.output.push_str("); ");
+                // Check if this is a nullable pointer (just T*) vs optional struct
+                let is_ptr = match lhs.as_ref() {
+                    Expr::Ident(name) => self.var_types.get(name)
+                        .map(|t| matches!(t, TypeVal::NullablePtr(_) | TypeVal::ManyPtr(_)))
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if is_ptr {
+                    self.output.push_str("_try");
+                    self.output.push_str(&id.to_string());
+                    self.output.push_str(" != NULL ? _try");
+                    self.output.push_str(&id.to_string());
+                    self.output.push_str(" : (");
+                    self.emit_expr(rhs);
+                    self.output.push_str("); })");
+                } else {
+                    // Optional struct: check .has
+                    self.output.push_str("_try");
+                    self.output.push_str(&id.to_string());
+                    self.output.push_str(".has ? _try");
+                    self.output.push_str(&id.to_string());
+                    self.output.push_str(".val : (");
+                    self.emit_expr(rhs);
+                    self.output.push_str("); })");
+                }
+            }
         }
     }
 
@@ -797,9 +917,12 @@ impl CBackend {
     fn emit_block_as_stmt(&mut self, block: &Block) {
         self.emit_line(" {");
         self.indent += 1;
+        self.defer_stack.push(Vec::new());
         for stmt in &block.stmts {
             self.emit_stmt(stmt);
         }
+        self.emit_pending_defers();
+        self.defer_stack.pop();
         self.indent -= 1;
         self.emit_indent();
         self.output.push('}');
