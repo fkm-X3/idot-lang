@@ -3,7 +3,7 @@
 
 # Ignore the Rust infrastructure from the language bar
 compiler/* linguist-vendored
-manager/* linguist-vendored
+matrix/* linguist-vendored
 
 # Force track idot (mapping to Python just to see the color change first)
 *.idot linguist-language=Python
