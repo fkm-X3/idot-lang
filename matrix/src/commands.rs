@@ -67,7 +67,7 @@ pub fn cmd_build(project_dir: &Path) {
             std::process::exit(1);
         });
 
-    let c_source = idot::compile(&source);
+    let c_source = idot::compile_with_path(&source, Some(&main_ido));
 
     let c_path = project_dir.join("build").join(format!("{}.c", manifest.name));
     let exe_name = if cfg!(target_os = "windows") {
@@ -162,7 +162,7 @@ pub fn cmd_test(project_dir: &Path) {
     for test_file in &test_files {
         println!("Testing {}...", test_file.display());
         let source = fs::read_to_string(test_file).expect("Failed to read test file");
-        let c_source = idot::compile(&source);
+        let c_source = idot::compile_with_path(&source, Some(test_file));
 
         let c_path = project_dir.join("build").join(
             format!("{}_test.c", test_file.file_stem().unwrap().to_str().unwrap())

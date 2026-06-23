@@ -23,6 +23,14 @@ struct Scope {
 pub struct SemanticAnalyzer {
     scopes: Vec<Scope>,
     pub errors: Vec<String>,
+    // Generic function templates: name -> (generic_params, params, return_type, body)
+    generic_fns: Vec<FnDecl>,
+    // Generic struct templates
+    generic_structs: Vec<StructDecl>,
+    // Monomorphization counter for unique naming
+    mono_counter: usize,
+    // Monomorphized function declarations to insert into the program
+    pub monomorphized_fns: Vec<FnDecl>,
 }
 
 impl SemanticAnalyzer {
@@ -30,6 +38,10 @@ impl SemanticAnalyzer {
         let mut analyzer = SemanticAnalyzer {
             scopes: vec![],
             errors: vec![],
+            generic_fns: vec![],
+            generic_structs: vec![],
+            mono_counter: 0,
+            monomorphized_fns: vec![],
         };
         analyzer.push_scope();
 
@@ -61,10 +73,12 @@ impl SemanticAnalyzer {
             return Err(std::mem::take(&mut self.errors));
         }
 
-        // Phase 2: resolve function bodies
+        // Phase 2: resolve function bodies (skip generic templates)
         for decl in program.iter_mut() {
             if let Decl::Fn(f) = decl {
-                self.analyze_fn_decl(f);
+                if f.generic_params.is_empty() {
+                    self.analyze_fn_decl(f);
+                }
             }
         }
 
@@ -119,6 +133,11 @@ impl SemanticAnalyzer {
         for decl in program {
             match decl {
                 Decl::Fn(f) => {
+                    if !f.generic_params.is_empty() {
+                        // Store generic function template for later monomorphization
+                        self.generic_fns.push(f.clone());
+                        continue;
+                    }
                     let params: Vec<TypeVal> = f
                         .params
                         .iter()
@@ -136,11 +155,38 @@ impl SemanticAnalyzer {
                     );
                 }
                 Decl::Struct(s) => {
-                    let fields: Vec<(String, TypeVal)> = s
-                        .fields
-                        .iter()
-                        .map(|f| (f.name.clone(), self.type_from_ast(&f.type_)))
-                        .collect();
+                    if !s.generic_params.is_empty() {
+                        // Store generic struct template for later monomorphization
+                        self.generic_structs.push(s.clone());
+                        continue;
+                    }
+                    let mut fields: Vec<(String, TypeVal)> = Vec::new();
+                    for f in &s.fields {
+                        let ft = self.type_from_ast(&f.type_);
+                        if f.using_ {
+                            if let TypeVal::Struct(ref inner_fields) = ft {
+                                for (iname, itype) in inner_fields {
+                                    fields.push((iname.clone(), itype.clone()));
+                                }
+                            } else if let TypeVal::Named(ref name) = ft {
+                                if let Some(resolved) = self.lookup_type_val(name) {
+                                    if let TypeVal::Struct(ref inner_fields) = resolved {
+                                        for (iname, itype) in inner_fields {
+                                            fields.push((iname.clone(), itype.clone()));
+                                        }
+                                    } else {
+                                        fields.push((f.name.clone(), ft.clone()));
+                                    }
+                                } else {
+                                    fields.push((f.name.clone(), ft.clone()));
+                                }
+                            } else {
+                                fields.push((f.name.clone(), ft.clone()));
+                            }
+                        } else {
+                            fields.push((f.name.clone(), ft));
+                        }
+                    }
                     self.add_symbol(
                         s.name.clone(),
                         SymbolKind::Type,
@@ -305,12 +351,21 @@ impl SemanticAnalyzer {
             Expr::Ident(name) => self.lookup_type_val(name),
 
             Expr::Call(func, args) => {
-                if let Expr::Ident(name) = func.as_ref() {
+                if let Expr::Ident(name) = func.as_mut() {
+                    // Type-check arguments first
+                    let arg_types: Vec<Option<TypeVal>> = args.iter_mut()
+                        .map(|a| self.type_of_expr(a))
+                        .collect();
+
                     if let Some(TypeVal::Fn(_, ret)) = self.lookup_type_val(name) {
-                        for arg in args.iter_mut() {
-                            self.type_of_expr(arg);
-                        }
                         ret.map(|r| *r)
+                    } else if let Some(mangled) = self.try_monomorphize_fn(name, &arg_types) {
+                        // Rewrite call site to use the monomorphized function name
+                        *name = mangled;
+                        // Look up the return type from the registered symbol
+                        self.lookup_type_val(name).and_then(|tv| {
+                            if let TypeVal::Fn(_, ret) = tv { ret.map(|r| *r) } else { None }
+                        })
                     } else {
                         self.errors
                             .push(format!("'{}' is not a function", name));
@@ -535,6 +590,19 @@ impl SemanticAnalyzer {
                 }
             }
 
+            Expr::Comptime(inner) => {
+                // Evaluate the inner expression at compile time
+                // For now, just type-check it
+                self.type_of_expr(inner)
+            }
+
+            Expr::When(cond, then_block, _else_branch) => {
+                // when is compile-time branching; only the then-block is semantically analyzed
+                // (the condition is assumed true — future comptime evaluation will select the branch)
+                self.type_of_expr(cond);
+                self.analyze_block(then_block)
+            }
+
             Expr::ArrayLit(items) => {
                 let mut elem_type = None;
                 for item in items.iter_mut() {
@@ -542,6 +610,104 @@ impl SemanticAnalyzer {
                 }
                 elem_type.map(|e| TypeVal::Slice(Box::new(e)))
             }
+        }
+    }
+
+    // === Generics: Monomorphization ===
+
+    fn try_monomorphize_fn(&mut self, name: &str, arg_types: &[Option<TypeVal>]) -> Option<String> {
+        // Find matching generic function template
+        let template = self.generic_fns.iter().find(|f| f.name == name)?.clone();
+
+        // Build type substitution map from generic params to concrete types
+        let mut type_map: std::collections::HashMap<String, TypeVal> = std::collections::HashMap::new();
+
+        // For each generic param, infer its concrete type from argument types
+        for (i, gparam) in template.generic_params.iter().enumerate() {
+            if let Some(Some(arg_t)) = arg_types.get(i) {
+                // If the param has a constraint (e.g., `type`), verify it
+                // For now, just map it
+                type_map.insert(gparam.name.clone(), arg_t.clone());
+            }
+        }
+
+        // Create a mangled name for the monomorphized version
+        let mangled = format!("{}__mono{}", name, self.mono_counter);
+        self.mono_counter += 1;
+
+        // Clone the template — keep the original AST types (e.g., Type::Named("T"))
+        // so analyze_fn_decl can set resolved types from them.
+        let mut mono_fn = template.clone();
+        mono_fn.name = mangled;
+        mono_fn.generic_params = Vec::new(); // resolved
+
+        // Analyze the monomorphized function body.
+        // This resolves types via type_from_ast, producing TypeVal::Named("T") for
+        // generic params — which we override below with concrete types from the type_map.
+        self.analyze_fn_decl(&mut mono_fn);
+
+        // Override resolved types with concrete types from the type_map
+        for param in mono_fn.params.iter_mut() {
+            if let Some(ref tv) = param.resolved_type {
+                param.resolved_type = Some(self.substitute_type_val(tv, &type_map));
+            }
+        }
+        mono_fn.resolved_ret_type = mono_fn.resolved_ret_type.as_ref()
+            .map(|tv| self.substitute_type_val(tv, &type_map));
+
+        // Store the monomorphized function for codegen
+        let mangled_name = mono_fn.name.clone();
+        self.monomorphized_fns.push(mono_fn);
+
+        Some(mangled_name)
+    }
+
+    fn substitute_type(&self, type_: &Type, type_map: &std::collections::HashMap<String, TypeVal>) -> Type {
+        match type_ {
+            Type::Named(name) => {
+                if type_map.contains_key(name) {
+                    Type::Named(format!("__mono_{}", name))
+                } else {
+                    type_.clone()
+                }
+            }
+            Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, type_map))),
+            Type::ConstPtr(inner) => Type::ConstPtr(Box::new(self.substitute_type(inner, type_map))),
+            Type::NullablePtr(inner) => Type::NullablePtr(Box::new(self.substitute_type(inner, type_map))),
+            Type::ManyPtr(inner) => Type::ManyPtr(Box::new(self.substitute_type(inner, type_map))),
+            Type::Slice(inner) => Type::Slice(Box::new(self.substitute_type(inner, type_map))),
+            Type::Array(n, inner) => Type::Array(*n, Box::new(self.substitute_type(inner, type_map))),
+            Type::Optional(inner) => Type::Optional(Box::new(self.substitute_type(inner, type_map))),
+            Type::ErrorUnion(inner) => Type::ErrorUnion(Box::new(self.substitute_type(inner, type_map))),
+            Type::Fn(params, ret) => Type::Fn(
+                params.iter().map(|p| self.substitute_type(p, type_map)).collect(),
+                ret.as_ref().map(|r| Box::new(self.substitute_type(r, type_map))),
+            ),
+            Type::Inferred => Type::Inferred,
+        }
+    }
+
+    fn substitute_type_val(&self, tv: &TypeVal, type_map: &std::collections::HashMap<String, TypeVal>) -> TypeVal {
+        match tv {
+            TypeVal::Named(name) => {
+                type_map.get(name).cloned().unwrap_or(tv.clone())
+            }
+            TypeVal::Ptr(inner) => TypeVal::Ptr(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::ConstPtr(inner) => TypeVal::ConstPtr(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::NullablePtr(inner) => TypeVal::NullablePtr(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::ManyPtr(inner) => TypeVal::ManyPtr(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::Slice(inner) => TypeVal::Slice(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::Array(n, inner) => TypeVal::Array(*n, Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::Optional(inner) => TypeVal::Optional(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::ErrorUnion(inner) => TypeVal::ErrorUnion(Box::new(self.substitute_type_val(inner, type_map))),
+            TypeVal::Struct(fields) => TypeVal::Struct(
+                fields.iter().map(|(n, ft)| (n.clone(), self.substitute_type_val(ft, type_map))).collect()
+            ),
+            TypeVal::Fn(params, ret) => TypeVal::Fn(
+                params.iter().map(|p| self.substitute_type_val(p, type_map)).collect(),
+                ret.as_ref().map(|r| Box::new(self.substitute_type_val(r, type_map))),
+            ),
+            other => other.clone(),
         }
     }
 

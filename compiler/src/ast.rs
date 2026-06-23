@@ -75,9 +75,16 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenericParam {
+    pub name: String,
+    pub constraint: Option<Type>,
+}
+
+#[derive(Debug, Clone)]
 pub struct FnDecl {
     pub name: String,
     pub params: Vec<Param>,
+    pub generic_params: Vec<GenericParam>,
     pub return_type: Option<Type>,
     pub body: Block,
     pub is_extern: bool,
@@ -89,6 +96,7 @@ pub struct FnDecl {
 #[derive(Debug, Clone)]
 pub struct StructDecl {
     pub name: String,
+    pub generic_params: Vec<GenericParam>,
     pub fields: Vec<StructField>,
 }
 
@@ -97,6 +105,7 @@ pub struct StructField {
     pub name: String,
     pub type_: Type,
     pub default: Option<Expr>,
+    pub using_: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +183,8 @@ pub enum Expr {
     Try(Box<Expr>),                     // try expr
     Catch(Box<Expr>, Box<Expr>),        // catch expr handler
     OrElse(Box<Expr>, Box<Expr>),       // opt orelse default
+    Comptime(Box<Expr>),                // comptime { ... }
+    When(Box<Expr>, Block, Option<Block>), // when cond { ... } else { ... }
 }
 
 #[derive(Debug, Clone)]

@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 fn main() {
@@ -29,39 +30,37 @@ fn main() {
     }
 }
 
-fn do_compile(input_path: &str, emit_c: bool) {
+fn do_compile(input_path_str: &str, emit_c: bool) {
+    let input_path = Path::new(input_path_str);
     let source = fs::read_to_string(input_path)
         .unwrap_or_else(|e| {
-            eprintln!("Error reading file '{}': {}", input_path, e);
+            eprintln!("Error reading file '{}': {}", input_path.display(), e);
             std::process::exit(1);
         });
 
-    let c_source = idot::compile(&source);
+    let c_source = idot::compile_with_path(&source, Some(input_path));
 
-    let stem = if let Some(s) = input_path.strip_suffix(".ido") {
-        s
-    } else {
-        input_path
-    };
-    let c_path = format!("{}.c", stem);
+    let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let build_dir = Path::new("build");
+    fs::create_dir_all(build_dir).ok();
+    let c_path = build_dir.join(format!("{}.c", stem));
     let exe_path = if cfg!(target_os = "windows") {
-        format!("{}.exe", stem)
+        build_dir.join(format!("{}.exe", stem))
     } else {
-        stem.to_string()
+        build_dir.join(stem)
     };
 
     fs::write(&c_path, &c_source)
         .unwrap_or_else(|e| {
-            eprintln!("Error writing C file '{}': {}", c_path, e);
+            eprintln!("Error writing C file '{}': {}", c_path.display(), e);
             std::process::exit(1);
         });
 
     if emit_c {
-        println!("Wrote C output to {}", c_path);
+        println!("Wrote C output to {}", c_path.display());
         return;
     }
 
-    // Compile with cc
     let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
     let status = Command::new(cc)
         .arg("-o")
@@ -78,28 +77,27 @@ fn do_compile(input_path: &str, emit_c: bool) {
         std::process::exit(1);
     }
 
-    println!("Compiled to {}", exe_path);
+    println!("Compiled to {}", exe_path.display());
 }
 
-fn do_run(input_path: &str) {
+fn do_run(input_path_str: &str) {
+    let input_path = Path::new(input_path_str);
     let source = fs::read_to_string(input_path)
         .unwrap_or_else(|e| {
-            eprintln!("Error reading file '{}': {}", input_path, e);
+            eprintln!("Error reading file '{}': {}", input_path.display(), e);
             std::process::exit(1);
         });
 
-    let c_source = idot::compile(&source);
+    let c_source = idot::compile_with_path(&source, Some(input_path));
 
-    let stem = if let Some(s) = input_path.strip_suffix(".ido") {
-        s
-    } else {
-        input_path
-    };
-    let c_path = format!("{}.c", stem);
+    let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let build_dir = Path::new("build");
+    fs::create_dir_all(build_dir).ok();
+    let c_path = build_dir.join(format!("{}.c", stem));
     let exe_path = if cfg!(target_os = "windows") {
-        format!("{}.exe", stem)
+        build_dir.join(format!("{}.exe", stem))
     } else {
-        stem.to_string()
+        build_dir.join(stem)
     };
 
     fs::write(&c_path, &c_source).expect("Failed to write C file");

@@ -85,11 +85,33 @@ impl CBackend {
                 self.output.push_str("typedef struct ");
                 self.output.push_str(&s.name);
                 self.output.push_str(" { ");
-                for (i, field) in s.fields.iter().enumerate() {
-                    if i > 0 { self.output.push_str("; "); }
-                    self.emit_type(&field.type_);
-                    self.output.push(' ');
-                    self.output.push_str(&field.name);
+                let mut field_idx = 0;
+                for field in &s.fields {
+                    if field.using_ {
+                        // Expand using fields: inline the referenced struct's fields
+                        if let Type::Named(ref _type_name) = field.type_ {
+                            // We don't have the full struct registry here, so just emit
+                            // the using field as a regular nested struct member.
+                            // The semantic analyzer handles field promotion.
+                            if field_idx > 0 { self.output.push_str("; "); }
+                            self.emit_type(&field.type_);
+                            self.output.push(' ');
+                            self.output.push_str(&field.name);
+                            field_idx += 1;
+                        } else {
+                            if field_idx > 0 { self.output.push_str("; "); }
+                            self.emit_type(&field.type_);
+                            self.output.push(' ');
+                            self.output.push_str(&field.name);
+                            field_idx += 1;
+                        }
+                    } else {
+                        if field_idx > 0 { self.output.push_str("; "); }
+                        self.emit_type(&field.type_);
+                        self.output.push(' ');
+                        self.output.push_str(&field.name);
+                        field_idx += 1;
+                    }
                 }
                 self.output.push_str("; } ");
                 self.output.push_str(&s.name);
@@ -827,6 +849,28 @@ impl CBackend {
                 }
                 self.output.push('}');
             }
+            Expr::Comptime(inner) => {
+                // comptime blocks evaluate at compile time; emit the inner expression.
+                // If the inner expression is a block with a single statement, extract
+                // just that expression so we don't emit invalid C like `{ 42; }` in an
+                // initializer context.
+                if let Expr::Block(block) = inner.as_ref() {
+                    if block.stmts.len() == 1 {
+                        if let Stmt::Expr(e) = &block.stmts[0] {
+                            self.emit_expr(e);
+                            return;
+                        }
+                    }
+                }
+                self.emit_expr(inner);
+            }
+
+            Expr::When(_cond, then_block, _else_branch) => {
+                // when is compile-time branching; emit only the then branch as-if
+                // (comptime evaluation selects the matching branch)
+                self.emit_block_as_stmt(then_block);
+            }
+
             Expr::ArrayLit(items) => {
                 self.output.push('{');
                 for (i, item) in items.iter().enumerate() {

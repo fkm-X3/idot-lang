@@ -30,6 +30,9 @@ pub enum TokenKind {
     Try,
     Catch,
     OrElse,
+    Comptime,
+    When,
+    Using,
 
     // Literals
     IntLit(i64),
@@ -439,6 +442,9 @@ impl Lexer {
             "try" => TokenKind::Try,
             "catch" => TokenKind::Catch,
             "orelse" => TokenKind::OrElse,
+            "comptime" => TokenKind::Comptime,
+            "when" => TokenKind::When,
+            "using" => TokenKind::Using,
             _ => TokenKind::Ident(s),
         }
     }

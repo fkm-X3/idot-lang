@@ -4,6 +4,7 @@ use crate::lexer::{Lexer, Token, TokenKind};
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    inhibit_struct_init: bool,
 }
 
 macro_rules! unexpected_token {
@@ -17,7 +18,7 @@ impl Parser {
     pub fn new(source: &str) -> Self {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.tokenize();
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, inhibit_struct_init: false }
     }
 
     fn peek(&self) -> &TokenKind {
@@ -128,10 +129,11 @@ impl Parser {
 
     fn parse_extern_decl(&mut self) -> Decl {
         self.skip_if(TokenKind::Extern);
-        let (name, params, return_type) = self.parse_fn_sig();
+        let (name, generic_params, params, return_type) = self.parse_fn_sig();
         self.expect(TokenKind::Semicolon);
         Decl::Fn(FnDecl {
             name,
+            generic_params,
             params,
             return_type,
             resolved_ret_type: None,
@@ -143,12 +145,13 @@ impl Parser {
     }
 
     // === Function Declaration ===
-    // "pub"? "fn" ident "(" param_list ")" ("->" type_or_tuple)? block
+    // "pub"? "fn" ident ("(" type_param_list ")")? "(" param_list ")" ("->" type_or_tuple)? block
     fn parse_fn_decl(&mut self, is_pub: bool) -> Decl {
-        let (name, params, return_type) = self.parse_fn_sig();
+        let (name, generic_params, params, return_type) = self.parse_fn_sig();
         let body = self.parse_block();
         Decl::Fn(FnDecl {
             name,
+            generic_params,
             params,
             return_type,
             resolved_ret_type: None,
@@ -159,9 +162,15 @@ impl Parser {
         })
     }
 
-    fn parse_fn_sig(&mut self) -> (String, Vec<Param>, Option<Type>) {
+    fn parse_fn_sig(&mut self) -> (String, Vec<GenericParam>, Vec<Param>, Option<Type>) {
         self.skip(); // fn
         let name = self.expect_ident();
+        // Generic parameters: fn foo[T: type, U: type](params...) -> ret
+        let generic_params = if *self.peek() == TokenKind::LBrack && self.peek_n(1) != &TokenKind::RBrack {
+            self.parse_generic_params()
+        } else {
+            Vec::new()
+        };
         self.expect(TokenKind::LParen);
         let params = self.parse_param_list();
         self.expect(TokenKind::RParen);
@@ -172,7 +181,32 @@ impl Parser {
         } else {
             None
         };
-        (name, params, return_type)
+        (name, generic_params, params, return_type)
+    }
+
+    fn parse_generic_params(&mut self) -> Vec<GenericParam> {
+        self.skip(); // [
+        let mut params = Vec::new();
+        if *self.peek() != TokenKind::RBrack {
+            loop {
+                let gname = self.expect_ident();
+                self.expect(TokenKind::Colon);
+                let constraint = if matches!(self.peek(), TokenKind::Ident(_)) {
+                    let cname = self.expect_ident();
+                    Some(Type::Named(cname))
+                } else {
+                    None
+                };
+                params.push(GenericParam { name: gname, constraint });
+                if *self.peek() == TokenKind::Comma {
+                    self.skip();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(TokenKind::RBrack);
+        params
     }
 
     fn parse_param_list(&mut self) -> Vec<Param> {
@@ -248,7 +282,7 @@ impl Parser {
     }
 
     // === Struct Declaration ===
-    // "pub"? "struct" ident "{" field_list "}"
+    // "pub"? "struct" ident ("(" type_param_list ")")? "{" field_list "}"
     fn parse_struct_decl(&mut self) -> Decl {
         self.skip(); // struct
         let name = if matches!(self.peek(), TokenKind::Ident(_)) {
@@ -256,15 +290,24 @@ impl Parser {
         } else {
             String::new()
         };
+        let generic_params = if *self.peek() == TokenKind::LBrack && self.peek_n(1) != &TokenKind::RBrack {
+            self.parse_generic_params()
+        } else {
+            Vec::new()
+        };
         self.expect(TokenKind::LBrace);
         let fields = self.parse_struct_fields();
         self.expect(TokenKind::RBrace);
-        Decl::Struct(StructDecl { name, fields })
+        Decl::Struct(StructDecl { name, generic_params, fields })
     }
 
     fn parse_struct_fields(&mut self) -> Vec<StructField> {
         let mut fields = Vec::new();
         while *self.peek() != TokenKind::RBrace && *self.peek() != TokenKind::Eof {
+            let using_ = *self.peek() == TokenKind::Using;
+            if using_ {
+                self.skip();
+            }
             let name = self.expect_ident();
             self.expect(TokenKind::Colon);
             let type_ = self.parse_type();
@@ -274,7 +317,7 @@ impl Parser {
             } else {
                 None
             };
-            fields.push(StructField { name, type_, default });
+            fields.push(StructField { name, type_, default, using_ });
             if *self.peek() == TokenKind::Comma {
                 self.skip();
             }
@@ -729,7 +772,7 @@ impl Parser {
                 let name = s.clone();
                 self.skip();
                 // Check for struct init: Foo{ ... }
-                if *self.peek() == TokenKind::LBrace {
+                if *self.peek() == TokenKind::LBrace && !self.inhibit_struct_init {
                     self.skip();
                     let mut fields = Vec::new();
                     if *self.peek() != TokenKind::RBrace {
@@ -768,6 +811,8 @@ impl Parser {
             TokenKind::For => self.parse_for_expr(),
             TokenKind::While => self.parse_while_expr(),
             TokenKind::Match => self.parse_match_expr(),
+            TokenKind::Comptime => self.parse_comptime_expr(),
+            TokenKind::When => self.parse_when_expr(),
 
             _ => unexpected_token!(self, "expression"),
         }
@@ -860,6 +905,18 @@ impl Parser {
                 Stmt::Continue
             }
 
+            // Comptime expression as statement
+            TokenKind::Comptime => {
+                let expr = self.parse_comptime_expr();
+                Stmt::Expr(expr)
+            }
+
+            // When expression as statement
+            TokenKind::When => {
+                let expr = self.parse_when_expr();
+                Stmt::Expr(expr)
+            }
+
             // Blocks are expression statements
             TokenKind::LBrace => {
                 let expr = self.parse_primary();
@@ -878,7 +935,13 @@ impl Parser {
     // if cond block ("else" (if | block))?
     fn parse_if_expr(&mut self) -> Expr {
         self.skip(); // if
-        let cond = self.parse_expr();
+        let cond = {
+            let saved = self.inhibit_struct_init;
+            self.inhibit_struct_init = true;
+            let c = self.parse_expr();
+            self.inhibit_struct_init = saved;
+            c
+        };
         let then_block = self.parse_block();
         let else_branch = if *self.peek() == TokenKind::Else {
             self.skip();
@@ -918,9 +981,44 @@ impl Parser {
     // while cond block
     fn parse_while_expr(&mut self) -> Expr {
         self.skip(); // while
-        let cond = self.parse_expr();
+        let cond = {
+            let saved = self.inhibit_struct_init;
+            self.inhibit_struct_init = true;
+            let c = self.parse_expr();
+            self.inhibit_struct_init = saved;
+            c
+        };
         let body = self.parse_block();
         Expr::While(Box::new(cond), body)
+    }
+
+    // === Comptime Expression ===
+    // comptime expr
+    fn parse_comptime_expr(&mut self) -> Expr {
+        self.skip(); // comptime
+        let inner = self.parse_expr();
+        Expr::Comptime(Box::new(inner))
+    }
+
+    // === When Expression ===
+    // when cond block ("else" block)?
+    fn parse_when_expr(&mut self) -> Expr {
+        self.skip(); // when
+        let cond = {
+            let saved = self.inhibit_struct_init;
+            self.inhibit_struct_init = true;
+            let c = self.parse_expr();
+            self.inhibit_struct_init = saved;
+            c
+        };
+        let then_block = self.parse_block();
+        let else_branch = if *self.peek() == TokenKind::Else {
+            self.skip();
+            Some(self.parse_block())
+        } else {
+            None
+        };
+        Expr::When(Box::new(cond), then_block, else_branch)
     }
 
     // === Match Expression ===
