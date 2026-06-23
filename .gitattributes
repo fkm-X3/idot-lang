@@ -1,0 +1,9 @@
+# Auto-detect text files and normalize to LF
+* text=auto eol=lf
+
+# Ignore the Rust infrastructure from the language bar
+compiler/* linguist-vendored
+matrix/* linguist-vendored
+
+# Force track idot (mapping to Python just to see the color change first)
+*.idot linguist-language=Python
