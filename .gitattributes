@@ -1,10 +1,6 @@
 # Auto-detect text files and normalize to LF
 * text=auto eol=lf
 
-# Ignore the Rust code
 compiler/** linguist-vendored=true
 manager/** linguist-vendored=true
-
-# Force GitHub to see and map the custom extension
-*.idot linguist-detectable=true
-*.idot linguist-language=Python
+*.idot linguist-language=Rust
