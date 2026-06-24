@@ -557,16 +557,16 @@ fn p_parse_postfix(p: *Parser) -> i64 {
                 }
             }
             p_ex(p, TK_RPAREN);
-            // Copy args from temp to exprs arena (contiguous block)
-            let args_base = arena_alloc((*p).exprs, arg_count * 8);
+            // Store args in children arena (keeps exprs arena as pure EXPR_BYTES array)
+            let args_base = (*p).children.len / 8;
             let mut ai: i64 = 0;
             while ai < arg_count {
                 let ae = arena_read_i64((*p).types, types_saved + ai * 8);
-                arena_write_i64((*p).exprs, args_base + ai * 8, ae);
+                children_append((*p).children, ae);
                 ai = ai + 1;
             }
             (*p).types.len = types_saved;
-            expr_set_child((*p).exprs, off, args_base - off);
+            expr_set_child((*p).exprs, off, args_base);
             expr_set_ccount((*p).exprs, off, arg_count);
             left = off;
         } else if p_pk(p) == TK_LBRACK {
@@ -633,8 +633,16 @@ fn p_parse_primary(p: *Parser) -> i64 {
         expr_set_int((*p).exprs, node, val);
         return node;
     }
-    if k == TK_FLOATLIT { p_ad(p);
-        let node = expr_store((*p).exprs, EX_FLOATLIT); return node;
+    if k == TK_FLOATLIT {
+        let off = (*p).pos * TOKEN_BYTES;
+        let s = token_start((*p).tokens, off);
+        let e = token_end((*p).tokens, off);
+        p_ad(p);
+        let float_str = string{ ptr = (*p).source.ptr + s, len = e - s };
+        let str_off = str_arena_append((*p).strs, float_str);
+        let node = expr_store((*p).exprs, EX_FLOATLIT);
+        expr_set_name((*p).exprs, node, str_off);
+        return node;
     }
     if k == TK_STRLIT {
         let off = (*p).pos * TOKEN_BYTES;
@@ -649,8 +657,29 @@ fn p_parse_primary(p: *Parser) -> i64 {
         expr_set_int((*p).exprs, node, e - s - 2); // length
         return node;
     }
-    if k == TK_CHARLIT { p_ad(p);
-        let node = expr_store((*p).exprs, EX_CHARLIT); return node;
+    if k == TK_CHARLIT {
+        let off = (*p).pos * TOKEN_BYTES;
+        let s = token_start((*p).tokens, off);
+        let e = token_end((*p).tokens, off);
+        p_ad(p);
+        let inner = string{ ptr = (*p).source.ptr + s + 1, len = e - s - 2 };
+        let mut ch: u8 = 0;
+        if inner.len > 0 {
+            ch = inner.ptr[0];
+            if ch == 92 && inner.len > 1 {
+                let esc = inner.ptr[1];
+                if esc == 110 { ch = 10; }
+                else if esc == 116 { ch = 9; }
+                else if esc == 114 { ch = 13; }
+                else if esc == 48 { ch = 0; }
+                else if esc == 39 { ch = 39; }
+                else if esc == 92 { ch = 92; }
+                else if esc == 34 { ch = 34; }
+            }
+        }
+        let node = expr_store((*p).exprs, EX_CHARLIT);
+        expr_set_int((*p).exprs, node, ch);
+        return node;
     }
     if k == TK_TRUE { p_ad(p);
         let node = expr_store((*p).exprs, EX_BOOLLIT); expr_set_int((*p).exprs, node, 1); return node;

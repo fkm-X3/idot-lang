@@ -220,30 +220,129 @@ fn cg_emit_type(cg: *CBackend, types: *Arena, strs: *Arena, type_id: i64) -> voi
     cg_emit_str(cg, "int");
 }
 
-// === String constant pool ===
+// === Type query helpers ===
 
-fn cg_emit_str_pool(cg: *CBackend, strs: *Arena, exprs: *Arena) -> void {
-    let expr_count = (*exprs).len / EXPR_BYTES;
-    let mut first = 1;
+fn cg_type_is_ptr(types: *Arena, type_id: i64) -> i32 {
+    if type_id < 0 { return 0; }
+    let tag = type_tag(types, type_id);
+    return tag == TY_PTR || tag == TY_CONSTPTR || tag == TY_NULLABLEPTR || tag == TY_MANYPTR;
+}
+
+fn cg_type_is_slice(types: *Arena, type_id: i64) -> i32 {
+    if type_id < 0 { return 0; }
+    return type_tag(types, type_id) == TY_SLICE;
+}
+
+fn cg_type_is_array(types: *Arena, type_id: i64) -> i32 {
+    if type_id < 0 { return 0; }
+    return type_tag(types, type_id) == TY_ARRAY;
+}
+
+fn cg_get_type_id_for_ident(decls: *Arena, strs: *Arena, types: *Arena, name_off: i64) -> i64 {
+    let target = str_read(strs, name_off);
+    let decl_count = (*decls).len / DECL_BYTES;
     let mut i: i64 = 0;
-    while i < expr_count {
-        let eoff = i * EXPR_BYTES;
-        let tag = expr_get_tag(exprs, eoff);
-        if tag == EX_STRLIT {
-            if first != 0 {
-                cg_emit_line(cg, "static const uint8_t* _str_data[] = {");
-                first = 0;
+    while i < decl_count {
+        let doff = i * DECL_BYTES;
+        let dtag = decl_get_tag(decls, doff);
+        let dname_off = decl_get_name(decls, doff);
+        let dname = str_read(strs, dname_off);
+        if dname.len == target.len {
+            let mut match_: i32 = 1;
+            let mut j: i64 = 0;
+            while j < dname.len {
+                if dname.ptr[j] != target.ptr[j] { match_ = 0; break; }
+                j = j + 1;
             }
-            let name_off = expr_get_name(exprs, eoff);
-            let s = str_read(strs, name_off);
-            let escaped = cg_esc_str(s);
-            cg_emit_str(cg, "    (uint8_t*)\"");
-            cg_emit_str(cg, escaped);
-            cg_emit_line(cg, "\",");
+            if match_ != 0 {
+                if dtag == DC_LET {
+                    return decl_get_extra(decls, doff);
+                }
+                if dtag == DC_CONST {
+                    return decl_get_extra(decls, doff);
+                }
+            }
         }
         i = i + 1;
     }
-    if first == 0 {
+    return 0;
+}
+
+fn cg_get_expr_type_id(types: *Arena, strs: *Arena, decls: *Arena, exprs: *Arena, eoff: i64) -> i64 {
+    let tid = expr_get_type(exprs, eoff);
+    if tid != 0 { return tid; }
+    let tag = expr_get_tag(exprs, eoff);
+    if tag == EX_IDENT {
+        let name_off = expr_get_name(exprs, eoff);
+        return cg_get_type_id_for_ident(decls, strs, types, name_off);
+    }
+    if tag == EX_DEREF || (tag == EX_UNARY && expr_get_op(exprs, eoff) == UOP_DEREF) {
+        let inner = expr_get_left(exprs, eoff);
+        let inner_tid = cg_get_expr_type_id(types, strs, decls, exprs, inner);
+        if inner_tid > 0 && cg_type_is_ptr(types, inner_tid) {
+            return type_data1(types, inner_tid);
+        }
+        return inner_tid;
+    }
+    if tag == EX_INDEX {
+        let arr = expr_get_left(exprs, eoff);
+        let arr_tid = cg_get_expr_type_id(types, strs, decls, exprs, arr);
+        if arr_tid > 0 {
+            let arr_tag = type_tag(types, arr_tid);
+            if arr_tag == TY_SLICE || arr_tag == TY_ARRAY {
+                return type_data1(types, arr_tid);
+            }
+            if cg_type_is_ptr(types, arr_tid) {
+                return type_data1(types, arr_tid);
+            }
+        }
+    }
+    return 0;
+}
+
+// === String constant pool ===
+
+fn cg_emit_str_pool(cg: *CBackend, strs: *Arena, exprs: *Arena) -> void {
+    let raw_len = (*exprs).len;
+    let mut pool_count: i64 = 0;
+    // First pass: count EX_STRLIT (walk raw bytes, skip block stmt data which breaks EXPR_BYTES alignment)
+    let mut pos: i64 = 0;
+    while pos < raw_len {
+        let tag = expr_get_tag(exprs, pos);
+        if tag == EX_STRLIT { pool_count = pool_count + 1; }
+        if tag == EX_BLOCK {
+            let stmt_count = expr_get_ccount(exprs, pos);
+            pos = pos + EXPR_BYTES + stmt_count * STMT_BYTES;
+        } else {
+            pos = pos + EXPR_BYTES;
+        }
+    }
+    if pool_count > 0 {
+        // Second pass: assign pool indices and emit
+        let mut idx: i64 = 0;
+        pos = 0;
+        cg_emit_line(cg, "static const IdotString _str_pool[] = {");
+        while pos < raw_len {
+            let tag = expr_get_tag(exprs, pos);
+            if tag == EX_STRLIT {
+                expr_set_int(exprs, pos, idx);
+                let name_off = expr_get_name(exprs, pos);
+                let s = str_read(strs, name_off);
+                let escaped = cg_esc_str(s);
+                cg_emit_str(cg, "    {(uint8_t*)\"");
+                cg_emit_str(cg, escaped);
+                cg_emit_str(cg, "\", ");
+                cg_emit_i64(cg, s.len);
+                cg_emit_line(cg, "},");
+                idx = idx + 1;
+            }
+            if tag == EX_BLOCK {
+                let stmt_count = expr_get_ccount(exprs, pos);
+                pos = pos + EXPR_BYTES + stmt_count * STMT_BYTES;
+            } else {
+                pos = pos + EXPR_BYTES;
+            }
+        }
         cg_emit_line(cg, "};");
         cg_emit_line(cg, "");
     }
@@ -291,7 +390,18 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     // Emit string constant pool
     cg_emit_str_pool(cg, strs, exprs);
 
-    // Third pass: emit full function definitions
+    // Third pass: emit global constants only (module-level lets handled inside functions)
+    i = 0;
+    while i < decl_count {
+        let doff = i * DECL_BYTES;
+        let tag = decl_get_tag(decls, doff);
+        if tag == DC_CONST {
+            cg_emit_global(cg, source, strs, types, exprs, stmts, decls, children, doff, tag);
+        }
+        i = i + 1;
+    }
+
+    // Fourth pass: emit full function definitions
     i = 0;
     while i < decl_count {
         let doff = i * DECL_BYTES;
@@ -478,7 +588,7 @@ fn cg_emit_fn(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let mut si: i64 = 0;
         while si < stmt_count {
             let soff = body_off + stmts_off + si * STMT_BYTES;
-            cg_emit_stmt(cg, source, strs, types, exprs, exprs, decls, children, soff);
+            cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
             si = si + 1;
         }
     }
@@ -634,7 +744,7 @@ fn cg_emit_block_as_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Ar
     let mut si: i64 = 0;
     while si < stmt_count {
         let soff = boff + stmts_off + si * STMT_BYTES;
-        cg_emit_stmt(cg, source, strs, types, exprs, exprs, decls, children, soff);
+        cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
         si = si + 1;
     }
     (*cg).indent = (*cg).indent - 1;
@@ -656,24 +766,34 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     }
 
     if tag == EX_FLOATLIT {
-        cg_emit_str(cg, "0.0");
+        let name_off = expr_get_name(exprs, eoff);
+        let float_str = str_read(strs, name_off);
+        cg_emit_str(cg, float_str);
         return;
     }
 
     if tag == EX_STRLIT {
-        let name_off = expr_get_name(exprs, eoff);
-        let s = str_read(strs, name_off);
-        let escaped = cg_esc_str(s);
-        cg_emit_str(cg, "((IdotString){(uint8_t*)\"");
-        cg_emit_str(cg, escaped);
-        cg_emit_str(cg, "\", sizeof(\"");
-        cg_emit_str(cg, escaped);
-        cg_emit_str(cg, "\") - 1})");
+        let pool_idx = expr_get_int(exprs, eoff);
+        cg_emit_str(cg, "_str_pool[");
+        cg_emit_i64(cg, pool_idx);
+        cg_emit_str(cg, "]");
         return;
     }
 
     if tag == EX_CHARLIT {
-        cg_emit_str(cg, "'c'");
+        let ch = expr_get_int(exprs, eoff);
+        cg_emit_str(cg, "'");
+        if ch == 10 { cg_emit_str(cg, "\\n"); }
+        else if ch == 9 { cg_emit_str(cg, "\\t"); }
+        else if ch == 13 { cg_emit_str(cg, "\\r"); }
+        else if ch == 0 { cg_emit_str(cg, "\\0"); }
+        else if ch == 39 { cg_emit_str(cg, "\\'"); }
+        else if ch == 92 { cg_emit_str(cg, "\\\\"); }
+        else {
+            let byte: u8 = ch;
+            da_append_bytes(&(*cg).out, &byte, 1);
+        }
+        cg_emit_str(cg, "'");
         return;
     }
 
@@ -729,12 +849,26 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let body = expr_get_right(exprs, eoff);
         let idx = (*cg).for_counter;
         (*cg).for_counter = (*cg).for_counter + 1;
-        // Emit slice iteration: for (size_t _for_i = 0; _for_i < iterable.len; _for_i++)
+        // Resolve iterable type to determine element type
+        let iter_type = cg_get_expr_type_id(types, strs, decls, exprs, iterable);
+        let is_slice = iter_type > 0 && cg_type_is_slice(types, iter_type);
+        let is_array = iter_type > 0 && cg_type_is_array(types, iter_type);
+        // Emit iteration: for (size_t _for_i = 0; _for_i < iterable.len; _for_i++)
         cg_emit_str(cg, "{ size_t _for_len");
         cg_emit_i32(cg, idx);
         cg_emit_str(cg, " = ");
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
-        cg_emit_str(cg, ".len; ");
+        if is_array {
+            // Array: use sizeof(arr)/sizeof(arr[0])
+            cg_emit_str(cg, "sizeof(");
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
+            cg_emit_str(cg, ")/sizeof(");
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
+            cg_emit_str(cg, "[0])");
+        } else {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
+            cg_emit_str(cg, ".len");
+        }
+        cg_emit_str(cg, "; ");
         cg_emit_str(cg, "for (size_t _for_i");
         cg_emit_i32(cg, idx);
         cg_emit_str(cg, " = 0; _for_i");
@@ -744,11 +878,23 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         cg_emit_str(cg, "; _for_i");
         cg_emit_i32(cg, idx);
         cg_emit_str(cg, "++) { ");
-        cg_emit_str(cg, "int ");
+        // Use element type for the loop variable instead of hardcoded int
+        let elem_type = 0;
+        if iter_type > 0 {
+            if is_slice || is_array { elem_type = type_data1(types, iter_type); }
+        }
+        if elem_type > 0 { cg_emit_type(cg, types, strs, elem_type); }
+        else { cg_emit_str(cg, "int"); }
+        cg_emit_str(cg, " ");
         cg_emit_str(cg, item_name);
         cg_emit_str(cg, " = ");
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
-        cg_emit_str(cg, ".ptr[_for_i");
+        if is_array {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
+            cg_emit_str(cg, "[_for_i");
+        } else {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, iterable);
+            cg_emit_str(cg, ".ptr[_for_i");
+        }
         cg_emit_i32(cg, idx);
         cg_emit_str(cg, "]; ");
         let stmts_off = expr_get_child(exprs, body);
@@ -756,7 +902,7 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let mut si: i64 = 0;
         while si < stmt_count {
             let soff = body + stmts_off + si * STMT_BYTES;
-            cg_emit_stmt(cg, source, strs, types, exprs, exprs, decls, children, soff);
+            cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
             si = si + 1;
         }
         cg_emit_str(cg, " } }");
@@ -801,7 +947,7 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
             let mut si: i64 = 0;
             while si < stmt_count {
                 let soff = arm_body + stmts_off + si * STMT_BYTES;
-                cg_emit_stmt(cg, source, strs, types, exprs, exprs, decls, children, soff);
+                cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
                 si = si + 1;
             }
             ai = ai + 3;
@@ -813,7 +959,7 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
             let mut si: i64 = 0;
             while si < stmt_count {
                 let soff = wildcard + stmts_off + si * STMT_BYTES;
-                cg_emit_stmt(cg, source, strs, types, exprs, exprs, decls, children, soff);
+                cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
                 si = si + 1;
             }
         }
@@ -880,7 +1026,7 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let mut ai: i64 = 0;
         while ai < arg_count {
             if ai > 0 { cg_emit_str(cg, ", "); }
-            let arg_expr = arena_read_i64(exprs, eoff + child_off + ai * 8);
+            let arg_expr = children_read(children, (child_off + ai) * 8);
             cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, arg_expr);
             ai = ai + 1;
         }
@@ -891,11 +1037,19 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     if tag == EX_INDEX {
         let arr = expr_get_left(exprs, eoff);
         let index_expr = expr_get_right(exprs, eoff);
-        // For slices, emit .ptr[i]; for arrays, emit [i]; default to [i]
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, arr);
-        cg_emit_str(cg, "[");
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, index_expr);
-        cg_emit_str(cg, "]");
+        let arr_type = cg_get_expr_type_id(types, strs, decls, exprs, arr);
+        // For slices, emit .ptr[i]; for arrays/pointers, emit [i]
+        if arr_type > 0 && cg_type_is_slice(types, arr_type) {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, arr);
+            cg_emit_str(cg, ".ptr[");
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, index_expr);
+            cg_emit_str(cg, "]");
+        } else {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, arr);
+            cg_emit_str(cg, "[");
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, index_expr);
+            cg_emit_str(cg, "]");
+        }
         return;
     }
 
@@ -903,8 +1057,14 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let obj = expr_get_left(exprs, eoff);
         let fname_off = expr_get_name(exprs, eoff);
         let fname = str_read(strs, fname_off);
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, obj);
-        cg_emit_str(cg, ".");
+        let obj_type = cg_get_expr_type_id(types, strs, decls, exprs, obj);
+        if obj_type > 0 && cg_type_is_ptr(types, obj_type) {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, obj);
+            cg_emit_str(cg, "->");
+        } else {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, obj);
+            cg_emit_str(cg, ".");
+        }
         cg_emit_str(cg, fname);
         return;
     }
@@ -913,12 +1073,22 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let arr = expr_get_left(exprs, eoff);
         let end = expr_get_right(exprs, eoff);
         let start = expr_get_extra(exprs, eoff);
+        // Emit slice as compound literal — C99 ternary for omitted bounds
+        cg_emit_str(cg, "((IdotString){");
         cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, arr);
-        cg_emit_str(cg, " /* slice[");
+        cg_emit_str(cg, ".ptr + (");
         if start >= 0 { cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, start); }
-        cg_emit_str(cg, "..");
+        else { cg_emit_str(cg, "0"); }
+        cg_emit_str(cg, "), (");
         if end >= 0 { cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, end); }
-        cg_emit_str(cg, "] */");
+        else {
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, arr);
+            cg_emit_str(cg, ".len");
+        }
+        cg_emit_str(cg, ") - (");
+        if start >= 0 { cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, start); }
+        else { cg_emit_str(cg, "0"); }
+        cg_emit_str(cg, ")})");
         return;
     }
 
