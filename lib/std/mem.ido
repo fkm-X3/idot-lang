@@ -1,0 +1,29 @@
+import "std/c";
+
+pub fn alloc(size: usize) -> *u8 {
+    return malloc(size);
+}
+
+pub fn alloc_zeroed(n: usize, size: usize) -> *u8 {
+    return calloc(n, size);
+}
+
+pub fn dealloc(ptr: *u8) -> void {
+    free(ptr);
+}
+
+pub fn resize(ptr: *u8, size: usize) -> *u8 {
+    return realloc(ptr, size);
+}
+
+pub fn zero_memory(ptr: *u8, size: usize) -> void {
+    memset(ptr, 0, size);
+}
+
+pub fn copy_memory(dst: *u8, src: *u8, size: usize) -> void {
+    memcpy(dst, src, size);
+}
+
+pub fn move_memory(dst: *u8, src: *u8, size: usize) -> void {
+    memmove(dst, src, size);
+}

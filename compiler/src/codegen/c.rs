@@ -144,10 +144,10 @@ impl CBackend {
     }
 
     fn emit_header(&mut self) {
+        self.emit_line("#include <stddef.h>");
         self.emit_line("#include <stdint.h>");
         self.emit_line("#include <stdbool.h>");
-        self.emit_line("#include <stddef.h>");
-        self.emit_line("#include <string.h>");
+        self.emit_line("typedef struct { uint8_t* ptr; size_t len; } IdotString;");
         self.emit_line("");
     }
 
@@ -174,10 +174,20 @@ impl CBackend {
                 self.output.push('*');
             }
             Type::Slice(inner) => {
-                // Represent slice as struct { T* ptr; size_t len; }
-                self.output.push_str("struct { ");
-                self.emit_type(inner);
-                self.output.push_str("* ptr; size_t len; }");
+                // Use IdotString typedef for []u8 (the string type)
+                if let Type::Named(name) = inner.as_ref() {
+                    if name == "u8" {
+                        self.output.push_str("IdotString");
+                    } else {
+                        self.output.push_str("struct { ");
+                        self.emit_type(inner);
+                        self.output.push_str("* ptr; size_t len; }");
+                    }
+                } else {
+                    self.output.push_str("struct { ");
+                    self.emit_type(inner);
+                    self.output.push_str("* ptr; size_t len; }");
+                }
             }
             Type::Array(size, inner) => {
                 self.emit_type(inner);
@@ -232,7 +242,7 @@ impl CBackend {
             "f64" => self.output.push_str("double"),
             "bool" => self.output.push_str("bool"),
             "void" => self.output.push_str("void"),
-            "string" => self.output.push_str("struct { uint8_t* ptr; size_t len; }"),
+            "string" => self.output.push_str("IdotString"),
             _ => self.output.push_str(name), // user-defined types
         }
     }
@@ -275,9 +285,14 @@ impl CBackend {
                 self.output.push('*');
             }
             TypeVal::Slice(inner) => {
-                self.output.push_str("struct { ");
-                self.emit_type_val(inner);
-                self.output.push_str("* ptr; size_t len; }");
+                // Use IdotString typedef for []u8 (the string type)
+                if matches!(inner.as_ref(), TypeVal::Int(IntSize::U8)) {
+                    self.output.push_str("IdotString");
+                } else {
+                    self.output.push_str("struct { ");
+                    self.emit_type_val(inner);
+                    self.output.push_str("* ptr; size_t len; }");
+                }
             }
             TypeVal::Array(size, inner) => {
                 self.emit_type_val(inner);
@@ -765,12 +780,15 @@ impl CBackend {
             }
             Expr::Unary(op, inner) => {
                 match op {
-                    UnOp::Neg => self.output.push('-'),
-                    UnOp::Not => self.output.push('!'),
-                    UnOp::Addr => self.output.push('&'),
-                    UnOp::Deref => self.output.push('*'),
+                    UnOp::Neg => { self.output.push('-'); self.emit_expr(inner); }
+                    UnOp::Not => { self.output.push('!'); self.emit_expr(inner); }
+                    UnOp::Addr => { self.output.push('&'); self.emit_expr(inner); }
+                    UnOp::Deref => {
+                        self.output.push_str("(*");
+                        self.emit_expr(inner);
+                        self.output.push(')');
+                    }
                 }
-                self.emit_expr(inner);
             }
             Expr::Binary(op, left, right) => {
                 self.output.push('(');
@@ -880,9 +898,10 @@ impl CBackend {
                 self.output.push('}');
             }
             Expr::Deref(inner) => {
-                // x.*  →  *x  (no parens so it remains a valid lvalue in C)
-                self.output.push('*');
+                // x.*  →  (*x)  (parens allow correct field access like (*ptr).field)
+                self.output.push_str("(*");
                 self.emit_expr(inner);
+                self.output.push(')');
             }
             Expr::Try(inner) => {
                 // try expr  →  { auto _tryN = (expr); if (_tryN.err) return _tryN.err; _tryN.data.val; }

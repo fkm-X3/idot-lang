@@ -1,0 +1,84 @@
+import "std/c";
+import "std/mem";
+
+// DynamicArray — type-erased, element size tracked at runtime
+struct DynamicArray {
+    data: *u8,
+    len: usize,
+    capacity: usize,
+    elem_size: usize,
+}
+
+pub fn da_new(elem_size: usize, initial_capacity: usize) -> DynamicArray {
+    let data: *u8 = alloc(initial_capacity * elem_size);
+    return DynamicArray{
+        data = data,
+        len = 0,
+        capacity = initial_capacity,
+        elem_size = elem_size,
+    };
+}
+
+pub fn da_deinit(da: *DynamicArray) -> void {
+    dealloc((*da).data);
+    (*da).data = alloc(1);
+    (*da).len = 0;
+    (*da).capacity = 1;
+}
+
+pub fn da_grow(da: *DynamicArray, min_capacity: usize) -> void {
+    let new_data: *u8 = resize((*da).data, min_capacity * (*da).elem_size);
+    (*da).data = new_data;
+    (*da).capacity = min_capacity;
+}
+
+pub fn da_ensure(da: *DynamicArray, needed: usize) -> void {
+    if needed > (*da).capacity {
+        let mut new_cap = (*da).capacity * 2;
+        if new_cap < needed {
+            new_cap = needed;
+        }
+        da_grow(da, new_cap);
+    }
+}
+
+pub fn da_append_bytes(da: *DynamicArray, src: *u8, count: usize) -> void {
+    let needed = (*da).len + count;
+    da_ensure(da, needed);
+    let dst: *u8 = (*da).data + (*da).len * (*da).elem_size;
+    copy_memory(dst, src, count);
+    (*da).len = (*da).len + count;
+}
+
+pub fn da_get_ptr(da: *DynamicArray, index: usize) -> *u8 {
+    return (*da).data + index * (*da).elem_size;
+}
+
+pub fn da_get_len(da: *DynamicArray) -> usize {
+    return (*da).len;
+}
+
+pub fn da_get_capacity(da: *DynamicArray) -> usize {
+    return (*da).capacity;
+}
+
+// Simple growable string builder using DynamicArray of bytes
+pub fn sb_new() -> DynamicArray {
+    return da_new(1, 64);
+}
+
+pub fn sb_append(sb: *DynamicArray, s: string) -> void {
+    da_append_bytes(sb, s.ptr, s.len);
+}
+
+pub fn sb_append_byte(sb: *DynamicArray, byte: u8) -> void {
+    da_append_bytes(sb, &byte, 1);
+}
+
+pub fn sb_get_ptr(sb: *DynamicArray) -> *u8 {
+    return (*sb).data;
+}
+
+pub fn sb_get_len(sb: *DynamicArray) -> usize {
+    return (*sb).len;
+}

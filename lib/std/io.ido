@@ -1,0 +1,56 @@
+import "std/c";
+
+const STDIN_FILENO: i32 = 0;
+const STDOUT_FILENO: i32 = 1;
+const STDERR_FILENO: i32 = 2;
+
+pub fn print(s: string) -> void {
+    write(STDOUT_FILENO, s.ptr, s.len);
+}
+
+pub fn println(s: string) -> void {
+    write(STDOUT_FILENO, s.ptr, s.len);
+    write(STDOUT_FILENO, "\n", 1);
+}
+
+pub fn print_err(s: string) -> void {
+    write(STDERR_FILENO, s.ptr, s.len);
+}
+
+pub fn print_errln(s: string) -> void {
+    write(STDERR_FILENO, s.ptr, s.len);
+    write(STDERR_FILENO, "\n", 1);
+}
+
+pub fn write_byte(byte: u8) -> void {
+    write(STDOUT_FILENO, &byte, 1);
+}
+
+// File operations
+const O_RDONLY: i32 = 0;
+const O_WRONLY: i32 = 1;
+const O_RDWR: i32 = 2;
+const O_CREAT: i32 = 0o100;
+const O_TRUNC: i32 = 0o1000;
+const O_APPEND: i32 = 0o2000;
+
+struct File {
+    fd: i32,
+}
+
+pub fn open_file(path: string, flags: i32) -> File {
+    let fd = open(path.ptr, flags, 0o644);
+    return File{ fd = fd };
+}
+
+pub fn close_file(file: File) -> void {
+    close(file.fd);
+}
+
+pub fn read_file(file: File, buf: *u8, count: usize) -> isize {
+    return read(file.fd, buf, count);
+}
+
+pub fn write_file(file: File, buf: *u8, count: usize) -> isize {
+    return write(file.fd, buf, count);
+}

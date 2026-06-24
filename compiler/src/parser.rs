@@ -775,17 +775,16 @@ impl Parser {
                 if *self.peek() == TokenKind::LBrace && !self.inhibit_struct_init {
                     self.skip();
                     let mut fields = Vec::new();
-                    if *self.peek() != TokenKind::RBrace {
-                        loop {
-                            let fname = self.expect_ident();
-                            self.expect(TokenKind::Eq);
-                            let val = self.parse_expr();
-                            fields.push((fname, val));
-                            if *self.peek() == TokenKind::Comma {
-                                self.skip();
-                            } else {
-                                break;
-                            }
+                    loop {
+                        if *self.peek() == TokenKind::RBrace { break; }
+                        let fname = self.expect_ident();
+                        self.expect(TokenKind::Eq);
+                        let val = self.parse_expr();
+                        fields.push((fname, val));
+                        if *self.peek() == TokenKind::Comma {
+                            self.skip();
+                        } else {
+                            break;
                         }
                     }
                     self.expect(TokenKind::RBrace);

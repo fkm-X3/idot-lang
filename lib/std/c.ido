@@ -1,0 +1,34 @@
+// Low-level C/libc FFI declarations
+// Buffer params use *u8 to match string's .ptr type (*u8)
+
+// Memory
+extern fn malloc(size: usize) -> *u8;
+extern fn calloc(n: usize, size: usize) -> *u8;
+extern fn realloc(ptr: *u8, size: usize) -> *u8;
+extern fn free(ptr: *u8) -> void;
+extern fn memcpy(dst: *u8, src: *u8, n: usize) -> *u8;
+extern fn memmove(dst: *u8, src: *u8, n: usize) -> *u8;
+extern fn memset(ptr: *u8, val: i32, n: usize) -> *u8;
+
+// I/O (POSIX)
+extern fn write(fd: i32, buf: *u8, count: usize) -> isize;
+extern fn read(fd: i32, buf: *u8, count: usize) -> isize;
+extern fn open(path: *u8, flags: i32, mode: i32) -> i32;
+extern fn close(fd: i32) -> i32;
+extern fn exit(code: i32) -> void;
+
+// Math (declared with compatible Idot types)
+extern fn sqrt(x: f64) -> f64;
+extern fn sin(x: f64) -> f64;
+extern fn cos(x: f64) -> f64;
+extern fn tan(x: f64) -> f64;
+extern fn pow(x: f64, y: f64) -> f64;
+extern fn floor(x: f64) -> f64;
+extern fn ceil(x: f64) -> f64;
+extern fn fabs(x: f64) -> f64;
+extern fn fmod(x: f64, y: f64) -> f64;
+
+// String
+extern fn strlen(s: *u8) -> usize;
+extern fn strcmp(a: *u8, b: *u8) -> i32;
+extern fn strncmp(a: *u8, b: *u8, n: usize) -> i32;

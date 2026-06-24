@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 use crate::manifest::Manifest;
 use crate::deps;
 
+fn get_stdlib_dir() -> PathBuf {
+    let matrix_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    matrix_dir.parent().unwrap().join("lib")
+}
+
 pub fn cmd_new(project_name: &str) {
     let dir = Path::new(project_name);
     if dir.exists() {
@@ -42,7 +47,8 @@ pub fn cmd_new(project_name: &str) {
 
 pub fn cmd_build(project_dir: &Path) {
     let manifest = load_manifest(project_dir);
-    let dep_import_dirs = resolve_deps(project_dir, &manifest);
+    let mut import_dirs = resolve_deps(project_dir, &manifest);
+    import_dirs.push(get_stdlib_dir());
 
     let main_ido = project_dir.join("src").join("main.ido");
     if !main_ido.exists() {
@@ -56,7 +62,7 @@ pub fn cmd_build(project_dir: &Path) {
             std::process::exit(1);
         });
 
-    let c_source = idot::compile_with_deps(&source, Some(&main_ido), &dep_import_dirs);
+    let c_source = idot::compile_with_deps(&source, Some(&main_ido), &import_dirs);
 
     let c_path = project_dir.join("build").join(format!("{}.c", manifest.name));
     let exe_name = if cfg!(target_os = "windows") {
@@ -127,7 +133,8 @@ pub fn cmd_test(project_dir: &Path) {
     }
 
     let manifest = load_manifest(project_dir);
-    let dep_import_dirs = resolve_deps(project_dir, &manifest);
+    let mut import_dirs = resolve_deps(project_dir, &manifest);
+    import_dirs.push(get_stdlib_dir());
 
     let test_files: Vec<_> = fs::read_dir(&src_dir)
         .unwrap()
@@ -152,7 +159,7 @@ pub fn cmd_test(project_dir: &Path) {
     for test_file in &test_files {
         println!("Testing {}...", test_file.display());
         let source = fs::read_to_string(test_file).expect("Failed to read test file");
-        let c_source = idot::compile_with_deps(&source, Some(test_file), &dep_import_dirs);
+        let c_source = idot::compile_with_deps(&source, Some(test_file), &import_dirs);
 
         let c_path = project_dir.join("build").join(
             format!("{}_test.c", test_file.file_stem().unwrap().to_str().unwrap())

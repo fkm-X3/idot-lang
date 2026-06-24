@@ -1,0 +1,37 @@
+// Integer math utilities
+
+pub fn min[T: type](a: T, b: T) -> T {
+    if a < b { return a; } else { return b; }
+}
+
+pub fn max[T: type](a: T, b: T) -> T {
+    if a > b { return a; } else { return b; }
+}
+
+pub fn clamp[T: type](val: T, lo: T, hi: T) -> T {
+    if val < lo { return lo; }
+    if val > hi { return hi; }
+    return val;
+}
+
+pub fn abs_i32(x: i32) -> i32 {
+    if x < 0 { return -x; }
+    return x;
+}
+
+pub fn abs_i64(x: i64) -> i64 {
+    if x < 0 { return -x; }
+    return x;
+}
+
+pub fn is_power_of_two(x: u64) -> bool {
+    return x != 0 && (x & (x - 1)) == 0;
+}
+
+pub fn align_forward(addr: usize, alignment: usize) -> usize {
+    return (addr + alignment - 1) / alignment * alignment;
+}
+
+pub fn align_backward(addr: usize, alignment: usize) -> usize {
+    return addr / alignment * alignment;
+}
