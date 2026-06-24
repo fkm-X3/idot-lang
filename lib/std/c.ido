@@ -32,3 +32,9 @@ extern fn fmod(x: f64, y: f64) -> f64;
 extern fn strlen(s: *u8) -> usize;
 extern fn strcmp(a: *u8, b: *u8) -> i32;
 extern fn strncmp(a: *u8, b: *u8, n: usize) -> i32;
+
+// System
+extern fn system(command: *u8) -> i32;
+
+// File size (POSIX)
+extern fn lseek(fd: i32, offset: isize, whence: i32) -> isize;

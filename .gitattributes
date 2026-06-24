@@ -1,6 +1,4 @@
 # Auto-detect text files and normalize to LF
 * text=auto eol=lf
 
-compiler/** linguist-vendored=true
-manager/** linguist-vendored=true
 *.idot linguist-language=Rust

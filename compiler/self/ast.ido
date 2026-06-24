@@ -1,0 +1,453 @@
+import "std";
+
+// ==================== Token Kinds ====================
+const TK_FN: i32 = 0;  const TK_CONST: i32 = 1;  const TK_LET: i32 = 2;
+const TK_MUT: i32 = 3;  const TK_IF: i32 = 4;    const TK_ELSE: i32 = 5;
+const TK_FOR: i32 = 6;  const TK_WHILE: i32 = 7; const TK_MATCH: i32 = 8;
+const TK_IN: i32 = 9;   const TK_RETURN: i32 = 10; const TK_STRUCT: i32 = 11;
+const TK_ENUM: i32 = 12; const TK_UNION: i32 = 13; const TK_IMPORT: i32 = 14;
+const TK_EXTERN: i32 = 15; const TK_PUB: i32 = 16; const TK_TRUE: i32 = 17;
+const TK_FALSE: i32 = 18; const TK_NULL: i32 = 19; const TK_BREAK: i32 = 20;
+const TK_CONTINUE: i32 = 21; const TK_DEFER: i32 = 22; const TK_ERRDEFER: i32 = 23;
+const TK_TRY: i32 = 24; const TK_CATCH: i32 = 25; const TK_ORELSE: i32 = 26;
+const TK_USING: i32 = 27;
+const TK_COMPTIME: i32 = 28; const TK_WHEN: i32 = 29;
+const TK_INTLIT: i32 = 30; const TK_FLOATLIT: i32 = 31;
+const TK_STRLIT: i32 = 32; const TK_CHARLIT: i32 = 33;
+const TK_IDENT: i32 = 34;
+const TK_PLUS: i32 = 35; const TK_MINUS: i32 = 36; const TK_STAR: i32 = 37;
+const TK_SLASH: i32 = 38; const TK_PERCENT: i32 = 39;
+const TK_PLUSEQ: i32 = 40; const TK_MINUSEQ: i32 = 41;
+const TK_STAREQ: i32 = 42; const TK_SLASHEQ: i32 = 43;
+const TK_PERCENTEQ: i32 = 44;
+const TK_EQEQ: i32 = 45; const TK_BANGEQ: i32 = 46;
+const TK_LT: i32 = 47; const TK_GT: i32 = 48;
+const TK_LTEQ: i32 = 49; const TK_GTEQ: i32 = 50;
+const TK_AMPAMP: i32 = 51; const TK_PIPEPIPE: i32 = 52;
+const TK_AMP: i32 = 53; const TK_PIPE: i32 = 54;
+const TK_CARET: i32 = 55; const TK_TILDE: i32 = 56;
+const TK_LTLT: i32 = 57; const TK_GTGT: i32 = 58;
+const TK_EQ: i32 = 59; const TK_COLON: i32 = 60;
+const TK_COLONCOLON: i32 = 61; const TK_COLONEQ: i32 = 62;
+const TK_ARROW: i32 = 63; const TK_FATARROW: i32 = 64;
+const TK_DOTDOT: i32 = 65; const TK_DOTDOTEQ: i32 = 66;
+const TK_DOT: i32 = 67; const TK_QUESTION: i32 = 68;
+const TK_BANG: i32 = 69; const TK_AT: i32 = 70;
+const TK_HASH: i32 = 71;
+const TK_LPAREN: i32 = 72; const TK_RPAREN: i32 = 73;
+const TK_LBRACK: i32 = 74; const TK_RBRACK: i32 = 75;
+const TK_LBRACE: i32 = 76; const TK_RBRACE: i32 = 77;
+const TK_SEMICOLON: i32 = 78; const TK_COMMA: i32 = 79;
+const TK_UNDERSCORE: i32 = 80;
+const TK_EOF: i32 = 81;
+
+// ==================== BinOp ====================
+const BOP_ADD: i32 = 0;  const BOP_SUB: i32 = 1;  const BOP_MUL: i32 = 2;
+const BOP_DIV: i32 = 3;  const BOP_MOD: i32 = 4;
+const BOP_EQ: i32 = 5;   const BOP_NE: i32 = 6;
+const BOP_LT: i32 = 7;   const BOP_GT: i32 = 8;
+const BOP_LE: i32 = 9;   const BOP_GE: i32 = 10;
+const BOP_AND: i32 = 11; const BOP_OR: i32 = 12;
+const BOP_BITAND: i32 = 13; const BOP_BITOR: i32 = 14;
+const BOP_BITXOR: i32 = 15; const BOP_SHL: i32 = 16;
+const BOP_SHR: i32 = 17;
+
+// ==================== UnOp ====================
+const UOP_NEG: i32 = 0; const UOP_NOT: i32 = 1;
+const UOP_ADDR: i32 = 2; const UOP_DEREF: i32 = 3;
+
+// ==================== Type Tags ====================
+const TY_VOID: i32 = 0;  const TY_BOOL: i32 = 1;
+const TY_I8: i32 = 2;    const TY_I16: i32 = 3;  const TY_I32: i32 = 4;
+const TY_I64: i32 = 5;   const TY_U8: i32 = 6;   const TY_U16: i32 = 7;
+const TY_U32: i32 = 8;   const TY_U64: i32 = 9;
+const TY_ISIZE: i32 = 10; const TY_USIZE: i32 = 11;
+const TY_F32: i32 = 12;   const TY_F64: i32 = 13;
+const TY_PTR: i32 = 14;   const TY_CONSTPTR: i32 = 15;
+const TY_NULLABLEPTR: i32 = 16; const TY_MANYPTR: i32 = 17;
+const TY_SLICE: i32 = 18; const TY_ARRAY: i32 = 19;
+const TY_OPTIONAL: i32 = 20; const TY_ERRORUNION: i32 = 21;
+const TY_FN: i32 = 22;    const TY_STRUCT: i32 = 23;
+const TY_NAMED: i32 = 24; const TY_INFERRED: i32 = 25;
+
+// ==================== Expr Tags ====================
+const EX_INTLIT: i32 = 0; const EX_FLOATLIT: i32 = 1;
+const EX_STRLIT: i32 = 2; const EX_CHARLIT: i32 = 3;
+const EX_BOOLLIT: i32 = 4; const EX_NULLLIT: i32 = 5;
+const EX_IDENT: i32 = 6; const EX_BLOCK: i32 = 7;
+const EX_IF: i32 = 8; const EX_FOR: i32 = 9;
+const EX_WHILE: i32 = 10; const EX_MATCH: i32 = 11;
+const EX_UNARY: i32 = 12; const EX_BINARY: i32 = 13;
+const EX_ASSIGN: i32 = 14;
+const EX_CALL: i32 = 15; const EX_INDEX: i32 = 16;
+const EX_FIELD: i32 = 17; const EX_SLICE: i32 = 18;
+const EX_STRUCTINIT: i32 = 19; const EX_ARRAYLIT: i32 = 20;
+const EX_DEREF: i32 = 21; const EX_TRY: i32 = 22;
+const EX_CATCH: i32 = 23; const EX_ORELSE: i32 = 24;
+
+// ==================== Stmt Tags ====================
+const ST_DECL: i32 = 0; const ST_EXPR: i32 = 1;
+const ST_RETURN: i32 = 2; const ST_BREAK: i32 = 3;
+const ST_CONTINUE: i32 = 4; const ST_DEFER: i32 = 5;
+const ST_ERRDEFER: i32 = 6;
+
+// ==================== Decl Tags ====================
+const DC_LET: i32 = 0; const DC_CONST: i32 = 1;
+const DC_FN: i32 = 2; const DC_STRUCT: i32 = 3;
+const DC_ENUM: i32 = 4; const DC_UNION: i32 = 5;
+const DC_IMPORT: i32 = 6;
+
+// ==================== Struct Layout: Arena-based storage ====================
+// All AST data is stored in flat arenas (byte arrays).
+// Each node type has a fixed slot size.
+const SIZEOF_I64: i32 = 8;
+const SIZEOF_I32: i32 = 4;
+const ARENA_GROW: i64 = 65536;
+
+struct Arena {
+    data: *u8,
+    len: i64,
+    cap: i64,
+}
+
+pub fn arena_new(initial: i64) -> Arena {
+    let data = alloc(initial);
+    return Arena{ data = data, len = 0, cap = initial };
+}
+
+pub fn arena_alloc(arena: *Arena, size: i64) -> i64 {
+    let offset = (*arena).len;
+    let needed = offset + size;
+    if needed > (*arena).cap {
+        let new_cap = (*arena).cap * 2;
+        if new_cap < needed { new_cap = needed; }
+        let new_data = resize((*arena).data, new_cap);
+        (*arena).data = new_data;
+        (*arena).cap = new_cap;
+    }
+    (*arena).len = needed;
+    return offset;
+}
+
+pub fn arena_write_i64(arena: *Arena, offset: i64, val: i64) -> void {
+    memcpy((*arena).data + offset, &val, 8);
+}
+
+pub fn arena_write_i32(arena: *Arena, offset: i64, val: i32) -> void {
+    memcpy((*arena).data + offset, &val, 4);
+}
+
+pub fn arena_read_i64(arena: *Arena, offset: i64) -> i64 {
+    let result: i64 = 0;
+    memcpy(&result, (*arena).data + offset, 8);
+    return result;
+}
+
+pub fn arena_read_i32(arena: *Arena, offset: i64) -> i32 {
+    let result: i32 = 0;
+    memcpy(&result, (*arena).data + offset, 4);
+    return result;
+}
+
+// Write a string: 8 bytes ptr + 8 bytes len at offset
+pub fn arena_write_str(arena: *Arena, offset: i64, s: string) -> void {
+    let mut tmp: i64 = 0;
+    memcpy((*arena).data + offset, s.ptr, 8);
+    memcpy((*arena).data + offset + 8, &s.len, 8);
+}
+
+pub fn arena_read_str(arena: *Arena, offset: i64) -> string {
+    let ptr: *u8 = 0;
+    let len: i64 = 0;
+    memcpy(&ptr, (*arena).data + offset, 8);
+    memcpy(&len, (*arena).data + offset + 8, 8);
+    return string{ ptr = ptr, len = len };
+}
+
+pub fn arena_append_i64(arena: *Arena, val: i64) -> i64 {
+    let off = arena_alloc(arena, 8);
+    arena_write_i64(arena, off, val);
+    return off;
+}
+
+pub fn arena_append_i32(arena: *Arena, val: i32) -> i64 {
+    let off = arena_alloc(arena, 4);
+    arena_write_i32(arena, off, val);
+    return off;
+}
+
+// ==================== Token Storage ====================
+// Token: kind(i32) + start(i32) + end(i32) = 12 bytes per token
+const TOKEN_BYTES: i64 = 12;
+
+pub fn token_store(tokens: *Arena, kind: i32, start: i32, end: i32) -> i64 {
+    let off = arena_alloc(tokens, TOKEN_BYTES);
+    arena_write_i32(tokens, off, kind);
+    arena_write_i32(tokens, off + 4, start);
+    arena_write_i32(tokens, off + 8, end);
+    return off;
+}
+
+pub fn token_kind(tokens: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(tokens, idx);
+}
+
+pub fn token_start(tokens: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(tokens, idx + 4);
+}
+
+pub fn token_end(tokens: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(tokens, idx + 8);
+}
+
+// ==================== Scope / Symbol Table ====================
+// Each scope tracks symbols in an arena.
+// Symbol: name_offset(i64), kind(i32), type_id(i32) = 8+4+4=16 bytes
+const SYM_BYTES: i64 = 16;
+
+pub fn sym_store(syms: *Arena, name_off: i64, kind: i32, type_id: i32) -> i64 {
+    let off = arena_alloc(syms, SYM_BYTES);
+    arena_write_i64(syms, off, name_off);
+    arena_write_i32(syms, off + 8, kind);
+    arena_write_i32(syms, off + 12, type_id);
+    return off;
+}
+
+pub fn sym_name(syms: *Arena, idx: i64) -> i64 {
+    return arena_read_i64(syms, idx);
+}
+
+pub fn sym_kind(syms: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(syms, idx + 8);
+}
+
+pub fn sym_type_id(syms: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(syms, idx + 12);
+}
+
+const SYMK_VARIABLE: i32 = 0;
+const SYMK_FUNCTION: i32 = 1;
+const SYMK_TYPE: i32 = 2;
+
+// ==================== Type Arena ====================
+// Each type entry is: tag(i32) + data1(i64) + data2(i32) = 16 bytes
+// For Ptr/Array/etc: data1 = child type id (i64), data2 = array size (i32)
+// For Named: data1 = name offset in string arena (i64)
+// For Struct: data1 = fields offset in string arena (i64), data2 = field count (i32)
+// For Fn: data1 = param types offset, data2 = param count, plus ret type
+const TYPE_BYTES: i64 = 16;
+
+pub fn type_store(types: *Arena, tag: i32, d1: i64, d2: i32) -> i64 {
+    let off = arena_alloc(types, TYPE_BYTES);
+    arena_write_i32(types, off, tag);
+    arena_write_i64(types, off + 4, d1);
+    arena_write_i32(types, off + 12, d2);
+    return off;
+}
+
+pub fn type_tag(types: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(types, idx);
+}
+
+pub fn type_data1(types: *Arena, idx: i64) -> i64 {
+    return arena_read_i64(types, idx + 4);
+}
+
+pub fn type_data2(types: *Arena, idx: i64) -> i32 {
+    return arena_read_i32(types, idx + 12);
+}
+
+// ==================== Expr Arena ====================
+// Expr: tag(i32) + int_val(i64) + float_val(f64=8) + bool_val(i32=4)
+//       + name_off(i64) + left(i64) + right(i64) + op(i32)
+//       + extra(i64) + child_off(i64) + child_count(i32) + type_id(i32)
+// Total: 4+8+8+4+8+8+8+4+8+8+4+4 = 76, rounded to 80
+const EXPR_BYTES: i64 = 80;
+
+const EX_OFF_TAG: i64 = 0;        // i32
+const EX_OFF_INT: i64 = 4;        // i64
+const EX_OFF_FLOAT: i64 = 12;     // f64 = i64
+const EX_OFF_BOOL: i64 = 20;      // i32
+const EX_OFF_NAME: i64 = 24;      // i64 (string arena offset)
+const EX_OFF_LEFT: i64 = 32;      // i64 (expr arena offset)
+const EX_OFF_RIGHT: i64 = 40;     // i64
+const EX_OFF_OP: i64 = 48;        // i32
+const EX_OFF_EXTRA: i64 = 52;     // i64
+const EX_OFF_CHILD: i64 = 60;     // i64 (offset into children arena)
+const EX_OFF_CCOUNT: i64 = 68;    // i32
+const EX_OFF_TYPE: i64 = 72;      // i32 (type id)
+// padding to 80
+
+pub fn expr_store(exprs: *Arena, tag: i32) -> i64 {
+    return arena_alloc(exprs, EXPR_BYTES);
+}
+
+pub fn expr_set_tag(exprs: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(exprs, off + EX_OFF_TAG, v);
+}
+pub fn expr_get_tag(exprs: *Arena, off: i64) -> i32 {
+    return arena_read_i32(exprs, off + EX_OFF_TAG);
+}
+pub fn expr_set_int(exprs: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(exprs, off + EX_OFF_INT, v);
+}
+pub fn expr_get_int(exprs: *Arena, off: i64) -> i64 {
+    return arena_read_i64(exprs, off + EX_OFF_INT);
+}
+pub fn expr_set_name(exprs: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(exprs, off + EX_OFF_NAME, v);
+}
+pub fn expr_get_name(exprs: *Arena, off: i64) -> i64 {
+    return arena_read_i64(exprs, off + EX_OFF_NAME);
+}
+pub fn expr_set_left(exprs: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(exprs, off + EX_OFF_LEFT, v);
+}
+pub fn expr_get_left(exprs: *Arena, off: i64) -> i64 {
+    return arena_read_i64(exprs, off + EX_OFF_LEFT);
+}
+pub fn expr_set_right(exprs: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(exprs, off + EX_OFF_RIGHT, v);
+}
+pub fn expr_get_right(exprs: *Arena, off: i64) -> i64 {
+    return arena_read_i64(exprs, off + EX_OFF_RIGHT);
+}
+pub fn expr_set_op(exprs: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(exprs, off + EX_OFF_OP, v);
+}
+pub fn expr_get_op(exprs: *Arena, off: i64) -> i32 {
+    return arena_read_i32(exprs, off + EX_OFF_OP);
+}
+pub fn expr_set_extra(exprs: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(exprs, off + EX_OFF_EXTRA, v);
+}
+pub fn expr_get_extra(exprs: *Arena, off: i64) -> i64 {
+    return arena_read_i64(exprs, off + EX_OFF_EXTRA);
+}
+pub fn expr_set_child(exprs: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(exprs, off + EX_OFF_CHILD, v);
+}
+pub fn expr_get_child(exprs: *Arena, off: i64) -> i64 {
+    return arena_read_i64(exprs, off + EX_OFF_CHILD);
+}
+pub fn expr_set_ccount(exprs: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(exprs, off + EX_OFF_CCOUNT, v);
+}
+pub fn expr_get_ccount(exprs: *Arena, off: i64) -> i32 {
+    return arena_read_i32(exprs, off + EX_OFF_CCOUNT);
+}
+pub fn expr_set_type(exprs: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(exprs, off + EX_OFF_TYPE, v);
+}
+pub fn expr_get_type(exprs: *Arena, off: i64) -> i32 {
+    return arena_read_i32(exprs, off + EX_OFF_TYPE);
+}
+
+// ==================== Stmt Arena ====================
+// Stmt: tag(i32) + expr_off(i64) + decl_off(i64) = 4+8+8=20, padded to 24
+const STMT_BYTES: i64 = 24;
+
+pub fn stmt_store(stmts: *Arena, tag: i32, expr_off: i64) -> i64 {
+    let off = arena_alloc(stmts, STMT_BYTES);
+    arena_write_i32(stmts, off, tag);
+    arena_write_i64(stmts, off + 4, expr_off);
+    return off;
+}
+
+pub fn stmt_tag(stmts: *Arena, off: i64) -> i32 {
+    return arena_read_i32(stmts, off);
+}
+
+pub fn stmt_expr(stmts: *Arena, off: i64) -> i64 {
+    return arena_read_i64(stmts, off + 4);
+}
+
+// ==================== Decl Arena ====================
+// Decl: tag(i32) + data_off(i64) + name_off(i64) + type_id(i32)
+//       + extra_off(i64) + extra2(i32) = 32 bytes
+const DECL_BYTES: i64 = 40;
+
+pub fn decl_store(decls: *Arena, tag: i32) -> i64 {
+    let off = arena_alloc(decls, DECL_BYTES);
+    decl_set_tag(decls, off, tag);
+    return off;
+}
+
+pub fn decl_set_tag(decls: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(decls, off, v);
+}
+pub fn decl_get_tag(decls: *Arena, off: i64) -> i32 {
+    return arena_read_i32(decls, off);
+}
+pub fn decl_set_data(decls: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(decls, off + 4, v);
+}
+pub fn decl_get_data(decls: *Arena, off: i64) -> i64 {
+    return arena_read_i64(decls, off + 4);
+}
+pub fn decl_set_name(decls: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(decls, off + 12, v);
+}
+pub fn decl_get_name(decls: *Arena, off: i64) -> i64 {
+    return arena_read_i64(decls, off + 12);
+}
+pub fn decl_set_type(decls: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(decls, off + 20, v);
+}
+pub fn decl_get_type(decls: *Arena, off: i64) -> i32 {
+    return arena_read_i32(decls, off + 20);
+}
+pub fn decl_set_extra(decls: *Arena, off: i64, v: i64) -> void {
+    arena_write_i64(decls, off + 24, v);
+}
+pub fn decl_get_extra(decls: *Arena, off: i64) -> i64 {
+    return arena_read_i64(decls, off + 24);
+}
+pub fn decl_set_extra2(decls: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(decls, off + 32, v);
+}
+pub fn decl_get_extra2(decls: *Arena, off: i64) -> i32 {
+    return arena_read_i32(decls, off + 32);
+}
+
+// ==================== String Arena ====================
+// Store immutable strings (identifiers, literals) in a contiguous buffer.
+// Each string: offset into arena + length
+
+pub fn str_arena_append(strs: *Arena, s: string) -> i64 {
+    let off = arena_alloc(strs, s.len + 1);
+    memcpy((*strs).data + off, s.ptr, s.len);
+    // null terminate
+    let zero: u8 = 0;
+    memcpy((*strs).data + off + s.len, &zero, 1);
+    return off;
+}
+
+pub fn str_read(strs: *Arena, off: i64) -> string {
+    let ptr: *u8 = (*strs).data + off;
+    let mut len: i64 = 0;
+    while ptr[len] != 0 {
+        len = len + 1;
+    }
+    return string{ ptr = ptr, len = len };
+}
+
+pub fn str_arena_read(strs: *Arena, off: i64, len: i64) -> string {
+    return string{ ptr = (*strs).data + off, len = len };
+}
+
+// ==================== Children Arena ====================
+// For storing lists of child offsets (e.g., function arguments).
+// Simply an array of i64 values.
+
+pub fn children_append(children: *Arena, val: i64) -> i64 {
+    return arena_append_i64(children, val);
+}
+
+pub fn children_read(children: *Arena, idx: i64) -> i64 {
+    return arena_read_i64(children, idx);
+}
+
+pub fn children_count(children: *Arena, start: i64, end: i64) -> i32 {
+    return (end - start) / 8;
+}

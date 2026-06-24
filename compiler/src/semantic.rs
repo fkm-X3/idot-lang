@@ -238,10 +238,12 @@ impl SemanticAnalyzer {
     }
 
     fn analyze_block(&mut self, block: &mut Block) -> Option<TypeVal> {
+        self.push_scope();
         let mut last_type = None;
         for stmt in block.stmts.iter_mut() {
             last_type = self.analyze_stmt(stmt);
         }
+        self.pop_scope();
         last_type
     }
 
@@ -400,15 +402,19 @@ impl SemanticAnalyzer {
                 }
             }
 
-            Expr::Unary(_, inner) => self.type_of_expr(inner),
-
-            Expr::Block(block) => {
-                let mut last_type = None;
-                for stmt in block.stmts.iter_mut() {
-                    last_type = self.analyze_stmt(stmt);
+            Expr::Unary(op, inner) => {
+                let inner_type = self.type_of_expr(inner);
+                match op {
+                    UnOp::Deref => match inner_type {
+                        Some(TypeVal::Ptr(t)) | Some(TypeVal::NullablePtr(t)) | Some(TypeVal::ConstPtr(t)) | Some(TypeVal::ManyPtr(t)) => Some(*t),
+                        _ => inner_type,
+                    },
+                    UnOp::Addr => inner_type.map(|t| TypeVal::Ptr(Box::new(t))),
+                    _ => inner_type,
                 }
-                last_type
             }
+
+            Expr::Block(block) => self.analyze_block(block),
 
             Expr::If(cond, then_block, else_branch) => {
                 self.type_of_expr(cond);

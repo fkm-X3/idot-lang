@@ -813,6 +813,23 @@ impl Parser {
             TokenKind::Comptime => self.parse_comptime_expr(),
             TokenKind::When => self.parse_when_expr(),
 
+            TokenKind::LBrack => {
+                self.skip();
+                let mut elements = Vec::new();
+                if *self.peek() != TokenKind::RBrack {
+                    loop {
+                        elements.push(self.parse_expr());
+                        if *self.peek() == TokenKind::Comma {
+                            self.skip();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(TokenKind::RBrack);
+                Expr::ArrayLit(elements)
+            }
+
             _ => unexpected_token!(self, "expression"),
         }
     }

@@ -1,0 +1,854 @@
+import "std";
+import "ast";
+
+struct Parser {
+    source: string,
+    tokens: *Arena,
+    strs: *Arena,
+    types: *Arena,
+    exprs: *Arena,
+    stmts: *Arena,
+    decls: *Arena,
+    children: *Arena,
+    pos: i64,
+}
+
+pub fn p_parser_new(s: string, toks: *Arena, strs: *Arena, ty: *Arena,
+                  ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena) -> Parser {
+    return Parser{ source = s, tokens = toks, strs = strs, types = ty,
+                   exprs = ex, stmts = st, decls = dc, children = ch, pos = 0 };
+}
+
+fn p_pk(p: *Parser) -> i32 {
+    return token_kind((*p).tokens, (*p).pos * TOKEN_BYTES);
+}
+fn p_ad(p: *Parser) -> i32 {
+    let k = p_pk(p); (*p).pos = (*p).pos + 1; return k;
+}
+fn p_ex(p: *Parser, exp: i32) -> void {
+    if p_pk(p) != exp {
+        print("parse error: expected ");
+        print(cg_int_to_str_i64(exp));
+        print(" got ");
+        println(cg_int_to_str_i64(p_pk(p)));
+        exit(1);
+    }
+    (*p).pos = (*p).pos + 1;
+}
+fn p_ex_id(p: *Parser) -> i64 {
+    let off = (*p).pos * TOKEN_BYTES;
+    let s = token_start((*p).tokens, off);
+    let e = token_end((*p).tokens, off);
+    let name = string{ ptr = (*p).source.ptr + s, len = e - s };
+    let no = str_arena_append((*p).strs, name);
+    p_ex(p, TK_IDENT);
+    return no;
+}
+
+// === Program ===
+pub fn p_parse_program(p: *Parser) -> void {
+    while p_pk(p) != TK_EOF {
+        p_parse_decl(p);
+    }
+}
+
+fn p_parse_decl(p: *Parser) -> void {
+    if p_pk(p) == TK_IMPORT { p_ad(p); p_ex(p, TK_STRLIT); p_ex(p, TK_SEMICOLON); return; }
+    if p_pk(p) == TK_EXTERN { p_ad(p); p_parse_fn_decl(p, true, false); p_ex(p, TK_SEMICOLON); return; }
+    if p_pk(p) == TK_PUB {
+        p_ad(p);
+        if p_pk(p) == TK_FN { p_parse_fn_decl(p, false, true); return; }
+        if p_pk(p) == TK_CONST { p_parse_const_decl(p); return; }
+        if p_pk(p) == TK_STRUCT { p_parse_struct_decl(p); return; }
+        if p_pk(p) == TK_ENUM { p_parse_enum_decl(p); return; }
+        if p_pk(p) == TK_UNION { p_parse_union_decl(p); return; }
+        println("parse error: unexpected token after pub"); exit(1);
+    }
+    if p_pk(p) == TK_FN { p_parse_fn_decl(p, false, false); return; }
+    if p_pk(p) == TK_CONST { p_parse_const_decl(p); return; }
+    if p_pk(p) == TK_LET { p_parse_let_decl(p); return; }
+    if p_pk(p) == TK_STRUCT { p_parse_struct_decl(p); return; }
+    if p_pk(p) == TK_ENUM { p_parse_enum_decl(p); return; }
+    if p_pk(p) == TK_UNION { p_parse_union_decl(p); return; }
+    println("parse error: unexpected token in decl"); exit(1);
+}
+
+// === Let ===
+fn p_parse_let_decl(p: *Parser) -> void {
+    p_ad(p); // let
+    let mutbl = 0;
+    if p_pk(p) == TK_MUT { p_ad(p); mutbl = 1; }
+    let name = p_ex_id(p);
+    let type_off: i64 = -1;
+    if p_pk(p) == TK_COLON { p_ad(p); type_off = p_parse_type(p); }
+    let init_off: i64 = -1;
+    if p_pk(p) == TK_EQ { p_ad(p); init_off = p_parse_expr(p); }
+    p_ex(p, TK_SEMICOLON);
+    let off = decl_store((*p).decls, DC_LET);
+    decl_set_name((*p).decls, off, name);
+    decl_set_data((*p).decls, off, init_off);
+    decl_set_extra((*p).decls, off, type_off);
+    decl_set_extra2((*p).decls, off, mutbl);
+}
+
+// === Const ===
+fn p_parse_const_decl(p: *Parser) -> void {
+    p_ad(p);
+    let name = p_ex_id(p);
+    let type_off: i64 = -1;
+    if p_pk(p) == TK_COLON { p_ad(p); type_off = p_parse_type(p); }
+    p_ex(p, TK_EQ);
+    let init = p_parse_expr(p);
+    p_ex(p, TK_SEMICOLON);
+    let off = decl_store((*p).decls, DC_CONST);
+    decl_set_name((*p).decls, off, name);
+    decl_set_data((*p).decls, off, init);
+    decl_set_extra((*p).decls, off, type_off);
+}
+
+// === Fn ===
+fn p_parse_fn_decl(p: *Parser, is_extern: i32, is_pub: i32) -> void {
+    p_ad(p); // consume TK_FN
+    let name = p_ex_id(p);
+    // generic params [T: type, ...]
+    if p_pk(p) == TK_LBRACK {
+        p_ad(p);
+        while p_pk(p) != TK_RBRACK && p_pk(p) != TK_EOF {
+            // skip generic param name and constraint
+            p_ex_id(p); p_ex(p, TK_COLON);
+            if p_pk(p) == TK_IDENT { p_ex_id(p); }
+            if p_pk(p) == TK_COMMA { p_ad(p); }
+        }
+        p_ex(p, TK_RBRACK);
+    }
+
+    p_ex(p, TK_LPAREN);
+    // params
+    let params_children_start = (*p).children.len / 8;
+    if p_pk(p) != TK_RPAREN {
+        while true {
+            let pname = p_ex_id(p);
+            p_ex(p, TK_COLON);
+            let ptype = p_parse_type(p);
+            if p_pk(p) == TK_EQ { p_ad(p); p_parse_expr(p); } // skip default
+            // store param info in children arena: name_off, type_off
+            children_append((*p).children, pname);
+            children_append((*p).children, ptype);
+            if p_pk(p) == TK_COMMA { p_ad(p); if p_pk(p) == TK_RPAREN { break; } }
+            else { break; }
+        }
+    }
+    let params_end = (*p).children.len / 8;
+    p_ex(p, TK_RPAREN);
+
+    let ret_type: i64 = -1;
+    if p_pk(p) == TK_ARROW { p_ad(p); ret_type = p_parse_type_or_tuple(p); }
+
+    let body_off: i64 = 0;
+    if !is_extern {
+        body_off = p_parse_block(p);
+    }
+
+    let off = decl_store((*p).decls, DC_FN);
+    decl_set_name((*p).decls, off, name);
+    decl_set_data((*p).decls, off, params_children_start);
+    decl_set_extra((*p).decls, off, params_end);
+    decl_set_extra2((*p).decls, off, ret_type);
+}
+
+// === Struct ===
+fn p_parse_struct_decl(p: *Parser) -> void {
+    p_ad(p);
+    let name = p_ex_id(p);
+    // generic params
+    if p_pk(p) == TK_LBRACK {
+        p_ad(p);
+        while p_pk(p) != TK_RBRACK && p_pk(p) != TK_EOF {
+            p_ex_id(p); p_ex(p, TK_COLON);
+            if p_pk(p) == TK_IDENT { p_ex_id(p); }
+            if p_pk(p) == TK_COMMA { p_ad(p); }
+        }
+        p_ex(p, TK_RBRACK);
+    }
+    p_ex(p, TK_LBRACE);
+    let fields_start = (*p).children.len / 8;
+    p_parse_struct_fields(p);
+    let fields_end = (*p).children.len / 8;
+    p_ex(p, TK_RBRACE);
+    let off = decl_store((*p).decls, DC_STRUCT);
+    decl_set_name((*p).decls, off, name);
+    decl_set_data((*p).decls, off, fields_start);
+    decl_set_extra((*p).decls, off, fields_end);
+}
+
+fn p_parse_struct_fields(p: *Parser) -> void {
+    while p_pk(p) != TK_RBRACE && p_pk(p) != TK_EOF {
+        let is_using: i32 = 0;
+        if p_pk(p) == TK_USING { p_ad(p); is_using = 1; }
+        let fname = p_ex_id(p);
+        p_ex(p, TK_COLON);
+        let ftype = p_parse_type(p);
+        children_append((*p).children, fname);
+        children_append((*p).children, ftype);
+        children_append((*p).children, is_using);
+        if p_pk(p) == TK_EQ { p_ad(p); p_parse_expr(p); }
+        if p_pk(p) == TK_COMMA { p_ad(p); }
+    }
+}
+
+// === Enum ===
+fn p_parse_enum_decl(p: *Parser) -> void {
+    p_ad(p);
+    let name = p_ex_id(p);
+    if p_pk(p) == TK_LPAREN { p_ad(p); p_parse_type(p); p_ex(p, TK_RPAREN); }
+    p_ex(p, TK_LBRACE);
+    let fields_start = (*p).children.len / 8;
+    while p_pk(p) != TK_RBRACE && p_pk(p) != TK_EOF {
+        let variant_name = p_ex_id(p);
+        children_append((*p).children, variant_name);
+        if p_pk(p) == TK_EQ { p_ad(p); let val = p_parse_expr(p); children_append((*p).children, val); }
+        else { children_append((*p).children, -1); }
+        if p_pk(p) == TK_COMMA { p_ad(p); }
+    }
+    let fields_end = (*p).children.len / 8;
+    p_ex(p, TK_RBRACE);
+    let off = decl_store((*p).decls, DC_ENUM);
+    decl_set_name((*p).decls, off, name);
+    decl_set_data((*p).decls, off, fields_start);
+    decl_set_extra((*p).decls, off, fields_end);
+}
+
+// === Union ===
+fn p_parse_union_decl(p: *Parser) -> void {
+    p_ad(p);
+    let name = p_ex_id(p);
+    if p_pk(p) == TK_LPAREN { p_ad(p); p_ex(p, TK_IDENT); p_ex(p, TK_RPAREN); } // (enum)
+    p_ex(p, TK_LBRACE);
+    let fields_start = (*p).children.len / 8;
+    p_parse_struct_fields(p);
+    let fields_end = (*p).children.len / 8;
+    p_ex(p, TK_RBRACE);
+    let off = decl_store((*p).decls, DC_UNION);
+    decl_set_name((*p).decls, off, name);
+    decl_set_data((*p).decls, off, fields_start);
+    decl_set_extra((*p).decls, off, fields_end);
+}
+
+// === Types ===
+fn p_parse_type(p: *Parser) -> i64 {
+    return p_parse_type_prec(p);
+}
+
+fn p_parse_type_or_tuple(p: *Parser) -> i64 {
+    if p_pk(p) == TK_LPAREN { p_ad(p); let t = p_parse_type(p); p_ex(p, TK_RPAREN); return t; }
+    return p_parse_type(p);
+}
+
+fn p_parse_type_prec(p: *Parser) -> i64 {
+    if p_pk(p) == TK_STAR {
+        p_ad(p);
+        if p_pk(p) == TK_IDENT {
+            let toff = (*p).pos * TOKEN_BYTES;
+            let t_start = token_start((*p).tokens, toff);
+            let t_end = token_end((*p).tokens, toff);
+            let tname = string{ ptr = (*p).source.ptr + t_start, len = t_end - t_start };
+            if tname.len == 5 && tname.ptr[0] == 99 && tname.ptr[1] == 111
+               && tname.ptr[2] == 110 && tname.ptr[3] == 115 && tname.ptr[4] == 116 {
+                p_ad(p); // const
+                let inner = p_parse_type_prec(p);
+                let result = type_store((*p).types, TY_CONSTPTR, inner, 0);
+                return result;
+            }
+        }
+        let inner = p_parse_type_prec(p);
+        return type_store((*p).types, TY_PTR, inner, 0);
+    }
+    if p_pk(p) == TK_QUESTION {
+        p_ad(p);
+        let inner = p_parse_type_prec(p);
+        return type_store((*p).types, TY_OPTIONAL, inner, 0);
+    }
+    if p_pk(p) == TK_BANG {
+        p_ad(p);
+        let inner = p_parse_type_prec(p);
+        return type_store((*p).types, TY_ERRORUNION, inner, 0);
+    }
+    if p_pk(p) == TK_LBRACK {
+        p_ad(p);
+        if p_pk(p) == TK_RBRACK {
+            p_ad(p); // []
+            let inner = p_parse_type_prec(p);
+            return type_store((*p).types, TY_SLICE, inner, 0);
+        }
+        // [N]T = array
+        let size: i64 = 0;
+        if p_pk(p) == TK_INTLIT {
+            let toff = (*p).pos * TOKEN_BYTES;
+            let t_start = token_start((*p).tokens, toff);
+            let t_end = token_end((*p).tokens, toff);
+            let num_str = string{ ptr = (*p).source.ptr + t_start, len = t_end - t_start };
+            size = p_parse_int(num_str);
+            p_ad(p);
+        }
+        p_ex(p, TK_RBRACK);
+        let inner = p_parse_type_prec(p);
+        return type_store((*p).types, TY_ARRAY, inner, size);
+    }
+    // Named type
+    let name = p_ex_id(p);
+    return type_store((*p).types, TY_NAMED, name, 0);
+}
+
+// === Expressions ===
+fn p_parse_expr(p: *Parser) -> i64 {
+    return p_parse_assign(p);
+}
+
+fn p_parse_assign(p: *Parser) -> i64 {
+    let lhs = p_parse_catch_orelse(p);
+    if p_pk(p) == TK_EQ {
+        p_ad(p);
+        let rhs = p_parse_assign(p);
+        let off = expr_store((*p).exprs, EX_ASSIGN);
+        expr_set_left((*p).exprs, off, lhs);
+        expr_set_right((*p).exprs, off, rhs);
+        return off;
+    }
+    return lhs;
+}
+
+fn p_parse_catch_orelse(p: *Parser) -> i64 {
+    let mut left = p_parse_or(p);
+    while true {
+        if p_pk(p) == TK_CATCH {
+            p_ad(p);
+            let right = p_parse_catch_orelse(p);
+            let off = expr_store((*p).exprs, EX_CATCH);
+            expr_set_left((*p).exprs, off, left);
+            expr_set_right((*p).exprs, off, right);
+            left = off;
+        } else if p_pk(p) == TK_ORELSE {
+            p_ad(p);
+            let right = p_parse_catch_orelse(p);
+            let off = expr_store((*p).exprs, EX_ORELSE);
+            expr_set_left((*p).exprs, off, left);
+            expr_set_right((*p).exprs, off, right);
+            left = off;
+        } else { break; }
+    }
+    return left;
+}
+
+fn p_parse_or(p: *Parser) -> i64 {
+    let mut left = p_parse_and(p);
+    while p_pk(p) == TK_PIPEPIPE {
+        p_ad(p);
+        let right = p_parse_and(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, BOP_OR);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_and(p: *Parser) -> i64 {
+    let mut left = p_parse_bit_or(p);
+    while p_pk(p) == TK_AMPAMP {
+        p_ad(p);
+        let right = p_parse_bit_or(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, BOP_AND);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_bit_or(p: *Parser) -> i64 {
+    let mut left = p_parse_bit_xor(p);
+    while p_pk(p) == TK_PIPE {
+        p_ad(p);
+        let right = p_parse_bit_xor(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, BOP_BITOR);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_bit_xor(p: *Parser) -> i64 {
+    let mut left = p_parse_bit_and(p);
+    while p_pk(p) == TK_CARET {
+        p_ad(p);
+        let right = p_parse_bit_and(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, BOP_BITXOR);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_bit_and(p: *Parser) -> i64 {
+    let mut left = p_parse_equality(p);
+    while p_pk(p) == TK_AMP {
+        p_ad(p);
+        let right = p_parse_equality(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, BOP_BITAND);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_equality(p: *Parser) -> i64 {
+    let mut left = p_parse_comparison(p);
+    while true {
+        let op = -1;
+        if p_pk(p) == TK_EQEQ { p_ad(p); op = BOP_EQ; }
+        else if p_pk(p) == TK_BANGEQ { p_ad(p); op = BOP_NE; }
+        else { break; }
+        let right = p_parse_comparison(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, op);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_comparison(p: *Parser) -> i64 {
+    let mut left = p_parse_shift(p);
+    while true {
+        let op = -1;
+        if p_pk(p) == TK_LT { p_ad(p); op = BOP_LT; }
+        else if p_pk(p) == TK_GT { p_ad(p); op = BOP_GT; }
+        else if p_pk(p) == TK_LTEQ { p_ad(p); op = BOP_LE; }
+        else if p_pk(p) == TK_GTEQ { p_ad(p); op = BOP_GE; }
+        else { break; }
+        let right = p_parse_shift(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, op);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_shift(p: *Parser) -> i64 {
+    let mut left = p_parse_term(p);
+    while true {
+        let op = -1;
+        if p_pk(p) == TK_LTLT { p_ad(p); op = BOP_SHL; }
+        else if p_pk(p) == TK_GTGT { p_ad(p); op = BOP_SHR; }
+        else { break; }
+        let right = p_parse_term(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, op);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_term(p: *Parser) -> i64 {
+    let mut left = p_parse_factor(p);
+    while true {
+        let op = -1;
+        if p_pk(p) == TK_PLUS { p_ad(p); op = BOP_ADD; }
+        else if p_pk(p) == TK_MINUS { p_ad(p); op = BOP_SUB; }
+        else { break; }
+        let right = p_parse_factor(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, op);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_factor(p: *Parser) -> i64 {
+    let mut left = p_parse_unary(p);
+    while true {
+        let op = -1;
+        if p_pk(p) == TK_STAR { p_ad(p); op = BOP_MUL; }
+        else if p_pk(p) == TK_SLASH { p_ad(p); op = BOP_DIV; }
+        else if p_pk(p) == TK_PERCENT { p_ad(p); op = BOP_MOD; }
+        else { break; }
+        let right = p_parse_unary(p);
+        let off = expr_store((*p).exprs, EX_BINARY);
+        expr_set_op((*p).exprs, off, op);
+        expr_set_left((*p).exprs, off, left);
+        expr_set_right((*p).exprs, off, right);
+        left = off;
+    }
+    return left;
+}
+
+fn p_parse_unary(p: *Parser) -> i64 {
+    if p_pk(p) == TK_MINUS { p_ad(p);
+        let inner = p_parse_unary(p);
+        let off = expr_store((*p).exprs, EX_UNARY);
+        expr_set_op((*p).exprs, off, UOP_NEG);
+        expr_set_left((*p).exprs, off, inner);
+        return off;
+    }
+    if p_pk(p) == TK_BANG { p_ad(p);
+        let inner = p_parse_unary(p);
+        let off = expr_store((*p).exprs, EX_UNARY);
+        expr_set_op((*p).exprs, off, UOP_NOT);
+        expr_set_left((*p).exprs, off, inner);
+        return off;
+    }
+    if p_pk(p) == TK_AMP { p_ad(p);
+        let inner = p_parse_unary(p);
+        let off = expr_store((*p).exprs, EX_UNARY);
+        expr_set_op((*p).exprs, off, UOP_ADDR);
+        expr_set_left((*p).exprs, off, inner);
+        return off;
+    }
+    if p_pk(p) == TK_STAR { p_ad(p);
+        let inner = p_parse_unary(p);
+        let off = expr_store((*p).exprs, EX_UNARY);
+        expr_set_op((*p).exprs, off, UOP_DEREF);
+        expr_set_left((*p).exprs, off, inner);
+        return off;
+    }
+    if p_pk(p) == TK_TRY { p_ad(p);
+        let inner = p_parse_unary(p);
+        let off = expr_store((*p).exprs, EX_TRY);
+        expr_set_left((*p).exprs, off, inner);
+        return off;
+    }
+    return p_parse_postfix(p);
+}
+
+fn p_parse_postfix(p: *Parser) -> i64 {
+    let mut left = p_parse_primary(p);
+
+    while true {
+        if p_pk(p) == TK_LPAREN {
+            p_ad(p);
+            let args_start = (*p).children.len / 8;
+            if p_pk(p) != TK_RPAREN {
+                while true {
+                    children_append((*p).children, p_parse_expr(p));
+                    if p_pk(p) == TK_COMMA { p_ad(p); } else { break; }
+                }
+            }
+            let args_end = (*p).children.len / 8;
+            p_ex(p, TK_RPAREN);
+            let off = expr_store((*p).exprs, EX_CALL);
+            expr_set_left((*p).exprs, off, left);
+            expr_set_child((*p).exprs, off, args_start);
+            expr_set_ccount((*p).exprs, off, args_end);
+            left = off;
+        } else if p_pk(p) == TK_LBRACK {
+            p_ad(p);
+            if p_pk(p) == TK_DOTDOT || p_pk(p) == TK_DOTDOTEQ {
+                // slice [..end]
+                p_ad(p);
+                let end: i64 = -1;
+                if p_pk(p) != TK_RBRACK { end = p_parse_expr(p); }
+                p_ex(p, TK_RBRACK);
+                let off = expr_store((*p).exprs, EX_SLICE);
+                expr_set_left((*p).exprs, off, left);
+                expr_set_right((*p).exprs, off, end);
+                left = off;
+            } else {
+                let start = p_parse_expr(p);
+                if p_pk(p) == TK_DOTDOT || p_pk(p) == TK_DOTDOTEQ {
+                    p_ad(p);
+                    let end: i64 = -1;
+                    if p_pk(p) != TK_RBRACK { end = p_parse_expr(p); }
+                    p_ex(p, TK_RBRACK);
+                    let off = expr_store((*p).exprs, EX_SLICE);
+                    expr_set_left((*p).exprs, off, left);
+                    expr_set_right((*p).exprs, off, end);
+                    expr_set_extra((*p).exprs, off, start);
+                    left = off;
+                } else {
+                    p_ex(p, TK_RBRACK);
+                    let off = expr_store((*p).exprs, EX_INDEX);
+                    expr_set_left((*p).exprs, off, left);
+                    expr_set_right((*p).exprs, off, start);
+                    left = off;
+                }
+            }
+        } else if p_pk(p) == TK_DOT {
+            p_ad(p);
+            if p_pk(p) == TK_STAR {
+                p_ad(p);
+                let off = expr_store((*p).exprs, EX_DEREF);
+                expr_set_left((*p).exprs, off, left);
+                left = off;
+            } else {
+                let fname = p_ex_id(p);
+                let off = expr_store((*p).exprs, EX_FIELD);
+                expr_set_left((*p).exprs, off, left);
+                expr_set_name((*p).exprs, off, fname);
+                left = off;
+            }
+        } else { break; }
+    }
+    return left;
+}
+
+fn p_parse_primary(p: *Parser) -> i64 {
+    let k = p_pk(p);
+    if k == TK_INTLIT {
+        let off = (*p).pos * TOKEN_BYTES;
+        let s = token_start((*p).tokens, off);
+        let e = token_end((*p).tokens, off);
+        let num_str = string{ ptr = (*p).source.ptr + s, len = e - s };
+        let val = p_parse_int(num_str);
+        p_ad(p);
+        let node = expr_store((*p).exprs, EX_INTLIT);
+        expr_set_int((*p).exprs, node, val);
+        return node;
+    }
+    if k == TK_FLOATLIT { p_ad(p);
+        let node = expr_store((*p).exprs, EX_FLOATLIT); return node;
+    }
+    if k == TK_STRLIT {
+        let off = (*p).pos * TOKEN_BYTES;
+        let s = token_start((*p).tokens, off);
+        let e = token_end((*p).tokens, off);
+        p_ad(p);
+        // Strip quotes and store
+        let inner = string{ ptr = (*p).source.ptr + s + 1, len = e - s - 2 };
+        let str_off = str_arena_append((*p).strs, inner);
+        let node = expr_store((*p).exprs, EX_STRLIT);
+        expr_set_name((*p).exprs, node, str_off);
+        expr_set_int((*p).exprs, node, e - s - 2); // length
+        return node;
+    }
+    if k == TK_CHARLIT { p_ad(p);
+        let node = expr_store((*p).exprs, EX_CHARLIT); return node;
+    }
+    if k == TK_TRUE { p_ad(p);
+        let node = expr_store((*p).exprs, EX_BOOLLIT); expr_set_int((*p).exprs, node, 1); return node;
+    }
+    if k == TK_FALSE { p_ad(p);
+        let node = expr_store((*p).exprs, EX_BOOLLIT); expr_set_int((*p).exprs, node, 0); return node;
+    }
+    if k == TK_NULL { p_ad(p);
+        return expr_store((*p).exprs, EX_NULLLIT);
+    }
+    if k == TK_IDENT {
+        let name = p_ex_id(p);
+        if p_pk(p) == TK_LBRACE {
+            // Struct init: Foo{ field = val, ... }
+            p_ad(p);
+            let fields_start = (*p).children.len / 8;
+            while true {
+                if p_pk(p) == TK_RBRACE { break; }
+                let fname = p_ex_id(p);
+                p_ex(p, TK_EQ);
+                let fval = p_parse_expr(p);
+                children_append((*p).children, fname);
+                children_append((*p).children, fval);
+                if p_pk(p) == TK_COMMA { p_ad(p); } else { break; }
+            }
+            let fields_end = (*p).children.len / 8;
+            p_ex(p, TK_RBRACE);
+            let node = expr_store((*p).exprs, EX_STRUCTINIT);
+            expr_set_name((*p).exprs, node, name);
+            expr_set_child((*p).exprs, node, fields_start);
+            expr_set_ccount((*p).exprs, node, fields_end);
+            return node;
+        }
+        let node = expr_store((*p).exprs, EX_IDENT);
+        expr_set_name((*p).exprs, node, name);
+        return node;
+    }
+    if k == TK_LBRACE {
+        return p_parse_block(p);
+    }
+    if k == TK_LPAREN {
+        p_ad(p);
+        let e = p_parse_expr(p);
+        p_ex(p, TK_RPAREN);
+        return e;
+    }
+    if k == TK_IF { return p_parse_if_expr(p); }
+    if k == TK_FOR { return p_parse_for_expr(p); }
+    if k == TK_WHILE { return p_parse_while_expr(p); }
+    if k == TK_MATCH { return p_parse_match_expr(p); }
+
+    println("parse error: unexpected token in expression");
+    exit(1);
+    return 0;
+}
+
+fn p_parse_if_expr(p: *Parser) -> i64 {
+    p_ad(p);
+    let cond = p_parse_expr(p);
+    let then_block = p_parse_block(p);
+    let else_off: i64 = -1;
+    if p_pk(p) == TK_ELSE {
+        p_ad(p);
+        if p_pk(p) == TK_IF {
+            else_off = p_parse_if_expr(p);
+        } else {
+            else_off = p_parse_block(p);
+        }
+    }
+    let node = expr_store((*p).exprs, EX_IF);
+    expr_set_left((*p).exprs, node, cond);
+    expr_set_right((*p).exprs, node, then_block);
+    expr_set_extra((*p).exprs, node, else_off);
+    return node;
+}
+
+fn p_parse_for_expr(p: *Parser) -> i64 {
+    p_ad(p);
+    let item = p_ex_id(p);
+    p_ex(p, TK_IN);
+    let iterable = p_parse_expr(p);
+    let body = p_parse_block(p);
+    let node = expr_store((*p).exprs, EX_FOR);
+    expr_set_left((*p).exprs, node, iterable);
+    expr_set_name((*p).exprs, node, item);
+    expr_set_right((*p).exprs, node, body);
+    return node;
+}
+
+fn p_parse_while_expr(p: *Parser) -> i64 {
+    p_ad(p);
+    let cond = p_parse_expr(p);
+    let body = p_parse_block(p);
+    let node = expr_store((*p).exprs, EX_WHILE);
+    expr_set_left((*p).exprs, node, cond);
+    expr_set_right((*p).exprs, node, body);
+    return node;
+}
+
+fn p_parse_match_expr(p: *Parser) -> i64 {
+    p_ad(p);
+    let expr = p_parse_expr(p);
+    p_ex(p, TK_LBRACE);
+    let arms_start = (*p).children.len / 8;
+    let mut wildcard: i64 = -1;
+    while p_pk(p) != TK_RBRACE && p_pk(p) != TK_EOF {
+        if p_pk(p) == TK_UNDERSCORE {
+            p_ad(p); p_ex(p, TK_FATARROW);
+            wildcard = p_parse_block(p);
+            if p_pk(p) == TK_COMMA { p_ad(p); }
+            break;
+        }
+        // pattern
+        let pat_start = (*p).children.len / 8;
+        while true {
+            let pat_expr = p_parse_expr(p);
+            children_append((*p).children, pat_expr);
+            if p_pk(p) == TK_COMMA { p_ad(p); if p_pk(p) == TK_FATARROW { break; } }
+            else { break; }
+        }
+        let pat_end = (*p).children.len / 8;
+        children_append((*p).children, pat_start);
+        children_append((*p).children, pat_end);
+        p_ex(p, TK_FATARROW);
+        let arm_body = p_parse_block(p);
+        children_append((*p).children, arm_body);
+        if p_pk(p) == TK_COMMA { p_ad(p); }
+    }
+    let arms_end = (*p).children.len / 8;
+    p_ex(p, TK_RBRACE);
+    let node = expr_store((*p).exprs, EX_MATCH);
+    expr_set_left((*p).exprs, node, expr);
+    expr_set_child((*p).exprs, node, arms_start);
+    expr_set_ccount((*p).exprs, node, arms_end);
+    expr_set_extra((*p).exprs, node, wildcard);
+    return node;
+}
+
+fn p_parse_block(p: *Parser) -> i64 {
+    p_ex(p, TK_LBRACE);
+    let stmts_start = (*p).stmts.len / STMT_BYTES;
+    while p_pk(p) != TK_RBRACE && p_pk(p) != TK_EOF {
+        p_parse_stmt(p);
+    }
+    let stmts_end = (*p).stmts.len / STMT_BYTES;
+    p_ex(p, TK_RBRACE);
+    let node = expr_store((*p).exprs, EX_BLOCK);
+    expr_set_child((*p).exprs, node, stmts_start);
+    expr_set_ccount((*p).exprs, node, stmts_end);
+    return node;
+}
+
+fn p_parse_stmt(p: *Parser) -> void {
+    let k = p_pk(p);
+    if k == TK_FN || k == TK_CONST || k == TK_LET || k == TK_STRUCT
+       || k == TK_ENUM || k == TK_UNION || k == TK_IMPORT || k == TK_EXTERN
+       || k == TK_PUB {
+        p_parse_decl(p);
+        return;
+    }
+    if k == TK_DEFER {
+        p_ad(p);
+        let e = p_parse_expr(p);
+        if p_pk(p) == TK_SEMICOLON { p_ad(p); }
+        let off = stmt_store((*p).stmts, ST_DEFER, e);
+        return;
+    }
+    if k == TK_ERRDEFER {
+        p_ad(p);
+        let e = p_parse_expr(p);
+        if p_pk(p) == TK_SEMICOLON { p_ad(p); }
+        let off = stmt_store((*p).stmts, ST_ERRDEFER, e);
+        return;
+    }
+    if k == TK_RETURN {
+        p_ad(p);
+        let e: i64 = -1;
+        if p_pk(p) != TK_SEMICOLON { e = p_parse_expr(p); }
+        p_ex(p, TK_SEMICOLON);
+        let off = stmt_store((*p).stmts, ST_RETURN, e);
+        return;
+    }
+    if k == TK_BREAK {
+        p_ad(p); p_ex(p, TK_SEMICOLON);
+        stmt_store((*p).stmts, ST_BREAK, -1);
+        return;
+    }
+    if k == TK_CONTINUE {
+        p_ad(p); p_ex(p, TK_SEMICOLON);
+        stmt_store((*p).stmts, ST_CONTINUE, -1);
+        return;
+    }
+    // Expression statement
+    let e = p_parse_expr(p);
+    if p_pk(p) == TK_SEMICOLON { p_ad(p); }
+    stmt_store((*p).stmts, ST_EXPR, e);
+}
+
+// === Integer parsing ===
+fn p_parse_int(s: string) -> i64 {
+    let mut val: i64 = 0;
+    let mut i: i64 = 0;
+    let mut neg: i32 = 0;
+    if i < s.len && s.ptr[i] == 45 { neg = 1; i = i + 1; }
+    if i < s.len && s.ptr[i] == 43 { i = i + 1; }
+    while i < s.len {
+        let d = s.ptr[i];
+        if d >= 48 && d <= 57 {
+            val = val * 10 + (d - 48);
+        } else { break; }
+        i = i + 1;
+    }
+    if neg != 0 { return -val; }
+    return val;
+}

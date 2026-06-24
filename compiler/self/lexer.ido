@@ -1,0 +1,272 @@
+import "std";
+import "ast";
+
+pub fn l_tokenize(source: string, tokens: *Arena, strs: *Arena) -> void {
+    let pos: i64 = 0;
+
+    while pos < source.len {
+        while pos < source.len {
+            let c = source.ptr[pos];
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                pos = pos + 1;
+            } else { break; }
+        }
+        if pos >= source.len { break; }
+
+        let start = pos;
+        let c = source.ptr[pos];
+
+        if c == 47 && pos + 1 < source.len && source.ptr[pos + 1] == 47 {
+            pos = pos + 2;
+            while pos < source.len && source.ptr[pos] != 10 { pos = pos + 1; }
+            continue;
+        }
+
+        if c == 47 && pos + 1 < source.len && source.ptr[pos + 1] == 42 {
+            pos = pos + 2;
+            while pos + 1 < source.len {
+                if source.ptr[pos] == 42 && source.ptr[pos + 1] == 47 {
+                    pos = pos + 2; break;
+                }
+                pos = pos + 1;
+            }
+            continue;
+        }
+
+        if c == 34 {
+            pos = pos + 1;
+            while pos < source.len {
+                if source.ptr[pos] == 34 { pos = pos + 1; break; }
+                if source.ptr[pos] == 92 && pos + 1 < source.len { pos = pos + 2; }
+                else { pos = pos + 1; }
+            }
+            token_store(tokens, TK_STRLIT, start, pos);
+            continue;
+        }
+
+        if c == 39 {
+            pos = pos + 1;
+            if pos < source.len && source.ptr[pos] == 92 { pos = pos + 2; }
+            else { pos = pos + 1; }
+            if pos < source.len && source.ptr[pos] == 39 { pos = pos + 1; }
+            token_store(tokens, TK_CHARLIT, start, pos);
+            continue;
+        }
+
+        if c >= 48 && c <= 57 {
+            l_lex_number(source, &pos, tokens, start);
+            continue;
+        }
+
+        if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 {
+            pos = pos + 1;
+            while pos < source.len {
+                let d = source.ptr[pos];
+                if (d >= 97 && d <= 122) || (d >= 65 && d <= 90) || (d >= 48 && d <= 57) || d == 95 {
+                    pos = pos + 1;
+                } else { break; }
+            }
+            let ident = string{ ptr = source.ptr + start, len = pos - start };
+            let kind = l_keyword(ident, strs);
+            token_store(tokens, kind, start, pos);
+            continue;
+        }
+
+        pos = pos + 1;
+        let kind = l_op(c, source, &pos);
+        token_store(tokens, kind, start, pos);
+    }
+
+    token_store(tokens, TK_EOF, pos, pos);
+}
+
+fn l_op(c: u8, source: string, pos: *i64) -> i32 {
+    let p = *pos;
+    if c == 43 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_PLUSEQ; }
+        return TK_PLUS;
+    }
+    if c == 45 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_MINUSEQ; }
+        if p < source.len && source.ptr[p] == 62 { *pos = p + 1; return TK_ARROW; }
+        return TK_MINUS;
+    }
+    if c == 42 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_STAREQ; }
+        return TK_STAR;
+    }
+    if c == 47 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_SLASHEQ; }
+        return TK_SLASH;
+    }
+    if c == 37 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_PERCENTEQ; }
+        return TK_PERCENT;
+    }
+    if c == 61 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_EQEQ; }
+        if p < source.len && source.ptr[p] == 62 { *pos = p + 1; return TK_FATARROW; }
+        return TK_EQ;
+    }
+    if c == 33 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_BANGEQ; }
+        return TK_BANG;
+    }
+    if c == 60 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_LTEQ; }
+        if p < source.len && source.ptr[p] == 60 { *pos = p + 1; return TK_LTLT; }
+        return TK_LT;
+    }
+    if c == 62 {
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_GTEQ; }
+        if p < source.len && source.ptr[p] == 62 { *pos = p + 1; return TK_GTGT; }
+        return TK_GT;
+    }
+    if c == 58 {
+        if p < source.len && source.ptr[p] == 58 { *pos = p + 1; return TK_COLONCOLON; }
+        if p < source.len && source.ptr[p] == 61 { *pos = p + 1; return TK_COLONEQ; }
+        return TK_COLON;
+    }
+    if c == 38 {
+        if p < source.len && source.ptr[p] == 38 { *pos = p + 1; return TK_AMPAMP; }
+        return TK_AMP;
+    }
+    if c == 124 {
+        if p < source.len && source.ptr[p] == 124 { *pos = p + 1; return TK_PIPEPIPE; }
+        return TK_PIPE;
+    }
+    if c == 46 {
+        if p < source.len && source.ptr[p] == 46 {
+            *pos = p + 1;
+            if *pos < source.len && source.ptr[*pos] == 61 { *pos = *pos + 1; return TK_DOTDOTEQ; }
+            return TK_DOTDOT;
+        }
+        return TK_DOT;
+    }
+    if c == 94 { return TK_CARET; }
+    if c == 126 { return TK_TILDE; }
+    if c == 63 { return TK_QUESTION; }
+    if c == 64 { return TK_AT; }
+    if c == 35 { return TK_HASH; }
+    if c == 40 { return TK_LPAREN; }
+    if c == 41 { return TK_RPAREN; }
+    if c == 91 { return TK_LBRACK; }
+    if c == 93 { return TK_RBRACK; }
+    if c == 123 { return TK_LBRACE; }
+    if c == 125 { return TK_RBRACE; }
+    if c == 59 { return TK_SEMICOLON; }
+    if c == 44 { return TK_COMMA; }
+    if c == 95 { return TK_UNDERSCORE; }
+    return TK_EOF;
+}
+
+fn l_lex_number(source: string, pos: *i64, tokens: *Arena, start: i64) -> void {
+    let p = *pos;
+    if source.ptr[p] == 48 && p + 1 < source.len {
+        let n = source.ptr[p + 1];
+        if n == 120 || n == 88 {
+            p = p + 2;
+            while p < source.len {
+                let d = source.ptr[p];
+                if (d >= 48 && d <= 57) || (d >= 97 && d <= 102) || (d >= 65 && d <= 70) { p = p + 1; }
+                else { break; }
+            }
+            *pos = p; token_store(tokens, TK_INTLIT, start, p); return;
+        }
+        if n == 111 || n == 79 {
+            p = p + 2;
+            while p < source.len {
+                let d = source.ptr[p];
+                if d >= 48 && d <= 55 { p = p + 1; } else { break; }
+            }
+            *pos = p; token_store(tokens, TK_INTLIT, start, p); return;
+        }
+        if n == 98 || n == 66 {
+            p = p + 2;
+            while p < source.len {
+                let d = source.ptr[p];
+                if d == 48 || d == 49 { p = p + 1; } else { break; }
+            }
+            *pos = p; token_store(tokens, TK_INTLIT, start, p); return;
+        }
+    }
+    while p < source.len {
+        let d = source.ptr[p];
+        if d >= 48 && d <= 57 { p = p + 1; } else { break; }
+    }
+    if p + 1 < source.len && source.ptr[p] == 46 && source.ptr[p + 1] >= 48 && source.ptr[p + 1] <= 57 {
+        p = p + 1;
+        while p < source.len {
+            let d = source.ptr[p];
+            if d >= 48 && d <= 57 { p = p + 1; } else { break; }
+        }
+        if p < source.len && (source.ptr[p] == 101 || source.ptr[p] == 69) {
+            p = p + 1;
+            if p < source.len && (source.ptr[p] == 45 || source.ptr[p] == 43) { p = p + 1; }
+            while p < source.len {
+                let d = source.ptr[p];
+                if d >= 48 && d <= 57 { p = p + 1; } else { break; }
+            }
+        }
+        *pos = p; token_store(tokens, TK_FLOATLIT, start, p);
+    } else {
+        *pos = p; token_store(tokens, TK_INTLIT, start, p);
+    }
+}
+
+fn l_keyword(s: string, strs: *Arena) -> i32 {
+    if s.len == 2 {
+        if l_s2(s, 102, 110) { return TK_FN; }
+        if l_s2(s, 105, 102) { return TK_IF; }
+        if l_s2(s, 105, 110) { return TK_IN; }
+    }
+    if s.len == 3 {
+        if l_s3(s, 102, 111, 114) { return TK_FOR; }
+        if l_s3(s, 108, 101, 116) { return TK_LET; }
+        if l_s3(s, 109, 117, 116) { return TK_MUT; }
+        if l_s3(s, 116, 114, 121) { return TK_TRY; }
+        if l_s3(s, 112, 117, 98)  { return TK_PUB; }
+    }
+    if s.len == 4 {
+        if l_s4(s, 101, 108, 115, 101) { return TK_ELSE; }
+        if l_s4(s, 110, 117, 108, 108) { return TK_NULL; }
+        if l_s4(s, 116, 114, 117, 101) { return TK_TRUE; }
+        if l_s4(s, 101, 110, 117, 109) { return TK_ENUM; }
+        if l_s4(s, 119, 104, 101, 110) { return TK_WHEN; }
+    }
+    if s.len == 5 {
+        if l_s5(s, 119, 104, 105, 108, 101) { return TK_WHILE; }
+        if l_s5(s, 99, 111, 110, 115, 116)  { return TK_CONST; }
+        if l_s5(s, 98, 114, 101, 97, 107)   { return TK_BREAK; }
+        if l_s5(s, 109, 97, 116, 99, 104)   { return TK_MATCH; }
+        if l_s5(s, 117, 115, 105, 110, 103) { return TK_USING; }
+        if l_s5(s, 99, 97, 116, 99, 104)    { return TK_CATCH; }
+        if l_s5(s, 100, 101, 102, 101, 114) { return TK_DEFER; }
+        if l_s5(s, 117, 110, 105, 111, 110) { return TK_UNION; }
+        if l_s5(s, 102, 97, 108, 115, 101)  { return TK_FALSE; }
+    }
+    if s.len == 6 {
+        if l_s6(s, 105, 109, 112, 111, 114, 116) { return TK_IMPORT; }
+        if l_s6(s, 101, 120, 116, 101, 114, 110) { return TK_EXTERN; }
+        if l_s6(s, 114, 101, 116, 117, 114, 110) { return TK_RETURN; }
+        if l_s6(s, 115, 116, 114, 117, 99, 116)  { return TK_STRUCT; }
+        if l_s6(s, 111, 114, 101, 108, 115, 101) { return TK_ORELSE; }
+    }
+    if s.len == 7 {
+    }
+    if s.len == 8 {
+        if l_s8(s, 99, 111, 110, 116, 105, 110, 117, 101) { return TK_CONTINUE; }
+        if l_s8(s, 101, 114, 114, 100, 101, 102, 101, 114) { return TK_ERRDEFER; }
+        if l_s8(s, 99, 111, 109, 112, 116, 105, 109, 101) { return TK_COMPTIME; }
+    }
+    str_arena_append(strs, s);
+    return TK_IDENT;
+}
+
+fn l_s2(s: string, a: u8, b: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b; }
+fn l_s3(s: string, a: u8, b: u8, c: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c; }
+fn l_s4(s: string, a: u8, b: u8, c: u8, d: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d; }
+fn l_s5(s: string, a: u8, b: u8, c: u8, d: u8, e: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e; }
+fn l_s6(s: string, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e && s.ptr[5]==f; }
+fn l_s7(s: string, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e && s.ptr[5]==f && s.ptr[6]==g; }
+fn l_s8(s: string, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e && s.ptr[5]==f && s.ptr[6]==g && s.ptr[7]==h; }

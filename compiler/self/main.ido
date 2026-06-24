@@ -1,0 +1,56 @@
+import "std";
+import "ast";
+import "lexer";
+import "parser";
+import "semantic";
+import "codegen";
+
+pub fn main() -> i32 {
+    let path: string = "compiler/self/main.ido";
+
+    let source = read_entire_file(path);
+    if source.len == 0 {
+        println("error: could not read file");
+        return 1;
+    }
+
+    let toks: Arena = arena_new(65536);
+    let strs: Arena = arena_new(65536);
+    let types: Arena = arena_new(65536);
+    let exprs: Arena = arena_new(65536);
+    let stmts: Arena = arena_new(65536);
+    let decls: Arena = arena_new(65536);
+    let children: Arena = arena_new(65536);
+
+    l_tokenize(source, &toks, &strs);
+    print("lexed ");
+    print(cg_int_to_str_i64(toks.len));
+    println(" bytes of tokens");
+
+    let p = p_parser_new(source, &toks, &strs, &types, &exprs, &stmts, &decls, &children);
+    p_parse_program(&p);
+    print("parsed ");
+    print(cg_int_to_str_i64(decls.len));
+    println(" declarations");
+
+    let ctx = s_sem_new(source, &toks, &strs, &types, &exprs, &stmts, &decls, &children);
+    s_sem_analyze(&ctx);
+    println("semantic analysis done");
+
+    let cg: CBackend = cg_new();
+    let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children);
+    println("codegen done");
+    print("output.len="); print(cg_int_to_str_i64(output.len)); println("");
+    print("output.ptr[0]="); print(cg_int_to_str_i64(output.ptr[0])); println("");
+
+    print("before write_str_to_file"); println("");
+    let c_path: string = "build/self_main.c";
+    print("after c_path"); println("");
+
+    // Write to stdout
+    write(1, output.ptr, output.len);
+    print("\n");
+
+    println("done");
+    return 0;
+}

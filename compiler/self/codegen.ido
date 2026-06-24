@@ -1,0 +1,240 @@
+import "std";
+import "ast";
+
+struct CBackend {
+    out: DynamicArray,  // StringBuilder
+    indent: i32,
+    for_counter: i32,
+    try_counter: i32,
+    defer_stack: Arena,
+}
+
+pub fn cg_new() -> CBackend {
+    return CBackend{
+        out = sb_new(),
+        indent = 0,
+        for_counter = 0,
+        try_counter = 0,
+        defer_stack = arena_new(1024),
+    };
+}
+
+fn cg_emit_line(cg: *CBackend, s: string) -> void {
+    cg_emit_indent(cg);
+    sb_append(&(*cg).out, s);
+    sb_append(&(*cg).out, "\n");
+}
+
+fn cg_emit_indent(cg: *CBackend) -> void {
+    let mut i: i32 = 0;
+    while i < (*cg).indent {
+        sb_append(&(*cg).out, "    ");
+        i = i + 1;
+    }
+}
+
+fn cg_emit_str(cg: *CBackend, s: string) -> void {
+    sb_append(&(*cg).out, s);
+}
+
+fn cg_emit_char(cg: *CBackend, c: u8) -> void {
+    let byte: u8 = c;
+    da_append_bytes(&(*cg).out, &byte, 1);
+}
+
+fn cg_emit_i32(cg: *CBackend, val: i32) -> void {
+    let str_rep: string = cg_int_to_str(val);
+    sb_append(&(*cg).out, str_rep);
+}
+
+fn cg_emit_i64(cg: *CBackend, val: i64) -> void {
+    let str_rep: string = cg_int_to_str_i64(val);
+    sb_append(&(*cg).out, str_rep);
+}
+
+fn cg_int_to_str(val: i32) -> string {
+    let buf = alloc(32);
+    let mut n: i64 = val;
+    let mut i: i64 = 31;
+    buf[i] = 0; i = i - 1;
+    if n == 0 { buf[i] = 48; i = i - 1; }
+    let mut neg = 0;
+    if n < 0 { neg = 1; n = -n; }
+    while n > 0 && i >= 0 {
+        buf[i] = 48 + (n % 10);
+        n = n / 10;
+        i = i - 1;
+    }
+    if neg != 0 { buf[i] = 45; i = i - 1; }
+    let start = i + 1;
+    let len = 31 - start;
+    return string{ ptr = buf + start, len = len };
+}
+
+fn cg_int_to_str_i64(val: i64) -> string {
+    let buf = alloc(32);
+    let mut n: i64 = val;
+    let mut i: i64 = 31;
+    buf[i] = 0; i = i - 1;
+    if n == 0 { buf[i] = 48; i = i - 1; }
+    let mut neg = 0;
+    if n < 0 { neg = 1; n = -n; }
+    while n > 0 && i >= 0 {
+        buf[i] = 48 + (n % 10);
+        n = n / 10;
+        i = i - 1;
+    }
+    if neg != 0 { buf[i] = 45; i = i - 1; }
+    let start = i + 1;
+    let len = 31 - start;
+    return string{ ptr = buf + start, len = len };
+}
+
+// === Main codegen ===
+pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
+                   exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena) -> string {
+    cg_emit_line(cg, "#include <stddef.h>");
+    cg_emit_line(cg, "#include <stdint.h>");
+    cg_emit_line(cg, "#include <stdbool.h>");
+    cg_emit_line(cg, "typedef struct { uint8_t* ptr; size_t len; } IdotString;");
+    cg_emit_line(cg, "");
+
+    // First pass: collect forward declarations
+    let decl_count = (*decls).len / DECL_BYTES;
+    print("cg_generate: decl_count="); print(cg_int_to_str_i64(decl_count)); println("");
+    print("decls len="); print(cg_int_to_str_i64((*decls).len)); println("");
+
+    // Raw dump of first 40 bytes of decls
+    print("decls raw: ");
+    let mut di: i64 = 0;
+    while di < 40 {
+        print(cg_int_to_str_i64((*decls).data[di]));
+        print(" ");
+        di = di + 1;
+    }
+    println("");
+
+    let mut i: i64 = 0;
+    while i < decl_count {
+        let doff = i * DECL_BYTES;
+        let tag = decl_get_tag(decls, doff);
+        if i < 5 {
+            print("pass1 i="); print(cg_int_to_str_i64(i));
+            print(" tag="); print(cg_int_to_str_i64(tag)); println("");
+        }
+        let name_off = decl_get_name(decls, doff);
+        let name = str_read(strs, name_off);
+
+        if tag == DC_STRUCT || tag == DC_ENUM {
+            cg_emit_type_def(cg, decls, strs, types, doff, tag, name);
+        }
+        i = i + 1;
+        if i % 50 == 0 {
+            print("cg_pass1: "); print(cg_int_to_str_i64(i)); println("");
+        }
+    }
+
+    println("cg_pass1 done");
+
+    // Second pass: emit function defs and globals
+    println("pass2 starting");
+    i = 0;
+    print("pass2 i="); print(cg_int_to_str_i64(i)); println("");
+    while i < decl_count {
+        print("pass2 loop top i="); print(cg_int_to_str_i64(i)); println("");
+        let doff = i * DECL_BYTES;
+        print("doff="); print(cg_int_to_str_i64(doff)); println("");
+        let tag = decl_get_tag(decls, doff);
+        print("tag="); print(cg_int_to_str_i64(tag)); println("");
+        let name_off = decl_get_name(decls, doff);
+        print("name_off="); print(cg_int_to_str_i64(name_off)); println("");
+        let name = str_read(strs, name_off);
+        print("name.len="); print(cg_int_to_str_i64(name.len)); println("");
+
+        if tag == DC_FN {
+            print("cg_emit_fn: "); println(name);
+            cg_emit_fn(cg, source, strs, types, exprs, stmts, decls, children, doff);
+            println("cg_emit_fn done");
+        }
+        if tag == DC_LET || tag == DC_CONST {
+            cg_emit_global(cg, source, strs, types, exprs, stmts, decls, children, doff, tag);
+        }
+        i = i + 1;
+    }
+
+    println("cg_pass2 done");
+
+    // Get the output string
+    let result = string{ ptr = sb_get_ptr(&(*cg).out), len = sb_get_len(&(*cg).out) };
+    return result;
+}
+
+fn cg_emit_type_def(cg: *CBackend, decls: *Arena, strs: *Arena, types: *Arena,
+                    doff: i64, tag: i32, name: string) -> void {
+    if tag == DC_STRUCT {
+        cg_emit_str(cg, "typedef struct ");
+        cg_emit_str(cg, name);
+        cg_emit_str(cg, " { ");
+        cg_emit_str(cg, "int dummy; ");
+        cg_emit_str(cg, "} ");
+        cg_emit_str(cg, name);
+        cg_emit_line(cg, ";");
+        cg_emit_line(cg, "");
+    }
+    if tag == DC_ENUM {
+        cg_emit_str(cg, "typedef enum { ");
+        cg_emit_str(cg, name);
+        cg_emit_str(cg, " } ");
+        cg_emit_str(cg, name);
+        cg_emit_line(cg, ";");
+        cg_emit_line(cg, "");
+    }
+}
+
+fn cg_emit_fn(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
+              exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena,
+              doff: i64) -> void {
+    let name_off = decl_get_name(decls, doff);
+    let name = str_read(strs, name_off);
+    let param_start = decl_get_data(decls, doff);
+    let param_end = decl_get_extra(decls, doff);
+
+    // Emit signature: void name(...)
+    cg_emit_str(cg, "void ");
+    cg_emit_str(cg, name);
+    cg_emit_str(cg, "(");
+
+    if param_end > param_start {
+        let mut pi: i64 = param_start;
+        while pi < param_end {
+            if pi > param_start { cg_emit_str(cg, ", "); }
+            let pname_off = children_read(children, pi * 8);
+            let ptype_off = children_read(children, (pi + 1) * 8);
+            cg_emit_str(cg, "int ");
+            let pname = str_read(strs, pname_off);
+            cg_emit_str(cg, pname);
+            pi = pi + 2;
+        }
+    }
+
+    cg_emit_line(cg, ") {");
+    (*cg).indent = (*cg).indent + 1;
+
+    // Emit body
+    cg_emit_line(cg, "/* function body */");
+
+    (*cg).indent = (*cg).indent - 1;
+    cg_emit_line(cg, "}");
+    cg_emit_line(cg, "");
+}
+
+fn cg_emit_global(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
+                  exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena,
+                  doff: i64, tag: i32) -> void {
+    let name_off = decl_get_name(decls, doff);
+    let name = str_read(strs, name_off);
+
+    cg_emit_str(cg, "int ");
+    cg_emit_str(cg, name);
+    cg_emit_line(cg, ";");
+}

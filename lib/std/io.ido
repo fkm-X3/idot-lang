@@ -1,4 +1,5 @@
 import "std/c";
+import "std/mem";
 
 const STDIN_FILENO: i32 = 0;
 const STDOUT_FILENO: i32 = 1;
@@ -10,7 +11,7 @@ pub fn print(s: string) -> void {
 
 pub fn println(s: string) -> void {
     write(STDOUT_FILENO, s.ptr, s.len);
-    write(STDOUT_FILENO, "\n", 1);
+    write_byte(10);
 }
 
 pub fn print_err(s: string) -> void {
@@ -19,7 +20,7 @@ pub fn print_err(s: string) -> void {
 
 pub fn print_errln(s: string) -> void {
     write(STDERR_FILENO, s.ptr, s.len);
-    write(STDERR_FILENO, "\n", 1);
+    write_byte(10);
 }
 
 pub fn write_byte(byte: u8) -> void {
@@ -33,6 +34,10 @@ const O_RDWR: i32 = 2;
 const O_CREAT: i32 = 0o100;
 const O_TRUNC: i32 = 0o1000;
 const O_APPEND: i32 = 0o2000;
+
+const SEEK_SET: i32 = 0;
+const SEEK_CUR: i32 = 1;
+const SEEK_END: i32 = 2;
 
 struct File {
     fd: i32,
@@ -53,4 +58,34 @@ pub fn read_file(file: File, buf: *u8, count: usize) -> isize {
 
 pub fn write_file(file: File, buf: *u8, count: usize) -> isize {
     return write(file.fd, buf, count);
+}
+
+pub fn file_size(file: File) -> isize {
+    let pos = lseek(file.fd, 0, SEEK_CUR);
+    let sz = lseek(file.fd, 0, SEEK_END);
+    lseek(file.fd, pos, SEEK_SET);
+    return sz;
+}
+
+pub fn read_entire_file(path: string) -> string {
+    let file = open_file(path, O_RDONLY);
+    let sz = file_size(file);
+    if sz <= 0 {
+        close_file(file);
+        return string{ ptr = alloc(1), len = 0 };
+    }
+    let buf = alloc(sz);
+    let nread = read_file(file, buf, sz);
+    close_file(file);
+    return string{ ptr = buf, len = nread };
+}
+
+pub fn write_str_to_file(path: string, content: string) -> void {
+    let file = open_file(path, O_WRONLY | O_CREAT | O_TRUNC);
+    write_file(file, content.ptr, content.len);
+    close_file(file);
+}
+
+pub fn run_system(cmd: string) -> i32 {
+    return system(cmd.ptr);
 }

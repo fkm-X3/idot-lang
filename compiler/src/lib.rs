@@ -16,7 +16,18 @@ pub fn compile(source: &str) -> String {
 }
 
 pub fn compile_with_path(source: &str, file_path: Option<&Path>) -> String {
-    compile_with_deps(source, file_path, &[])
+    let mut include_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let lib_dir = Path::new(manifest_dir).parent().unwrap().join("lib");
+        if lib_dir.exists() {
+            include_dirs.push(lib_dir.clone());
+            let std_dir = lib_dir.join("std");
+            if std_dir.exists() {
+                include_dirs.push(std_dir);
+            }
+        }
+    }
+    compile_with_deps(source, file_path, &include_dirs)
 }
 
 pub fn compile_with_deps(
@@ -56,6 +67,7 @@ fn parse_with_imports(
     visited: &mut HashSet<PathBuf>,
     include_dirs: &[PathBuf],
 ) -> Vec<ast::Decl> {
+
     let mut parser = Parser::new(source);
     let program = parser.parse();
 

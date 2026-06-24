@@ -1,0 +1,162 @@
+import "std";
+import "ast";
+
+struct SemContext {
+    source: string,
+    tokens: *Arena,
+    strs: *Arena,
+    types: *Arena,
+    exprs: *Arena,
+    stmts: *Arena,
+    decls: *Arena,
+    children: *Arena,
+    // Scopes: each scope has a start/end index into the syms arena
+    scopes: Arena,
+    syms: Arena,
+    // Track which scope we're in
+    scope_start: Arena,  // parallel array: scope_i -> start idx in syms
+    scope_end: Arena,    // parallel array: scope_i -> end idx in syms
+    curr_scope: i64,
+    // Generics
+    generic_fn_decls: Arena,
+    generic_struct_decls: Arena,
+    mono_counter: i32,
+    // Monomorphized fns to add
+    mono_fns: Arena,
+}
+
+pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
+               ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena) -> SemContext {
+    let ctx = SemContext{
+        source = src, tokens = toks, strs = strs, types = ty,
+        exprs = ex, stmts = st, decls = dc, children = ch,
+        scopes = arena_new(1024), syms = arena_new(4096),
+        scope_start = arena_new(256), scope_end = arena_new(256),
+        curr_scope = 0, generic_fn_decls = arena_new(4096),
+        generic_struct_decls = arena_new(4096), mono_counter = 0,
+        mono_fns = arena_new(4096),
+    };
+    // Register built-in types
+    let builtins = ["void", "bool", "i8", "i16", "i32", "i64",
+                    "u8", "u16", "u32", "u64", "isize", "usize",
+                    "f32", "f64", "string"];
+    let mut i: i64 = 0;
+    while i < 15 {
+        let name = builtins[i];
+        let type_id = s_resolve_named_type(name, ctx.types);
+        // Append name + type_id to syms
+        let name_off = str_arena_append(strs, name);
+        sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id);
+        i = i + 1;
+    }
+    // Record scope 0 boundaries
+    arena_append_i64(&ctx.scope_start, 0);
+    arena_append_i64(&ctx.scope_end, ctx.syms.len / SYM_BYTES);
+    return ctx;
+}
+
+fn s_resolve_named_type(name: string, types: *Arena) -> i32 {
+    if name.len == 4 {
+        if s_seq4(name, 118, 111, 105, 100) { return type_store(types, TY_VOID, 0, 0); }
+        if s_seq4(name, 98, 111, 111, 108) { return type_store(types, TY_BOOL, 0, 0); }
+        if s_seq4(name, 105, 51, 50, 0)    { return type_store(types, TY_I32, 0, 0); }
+        if s_seq4(name, 117, 56, 0, 0)     { return type_store(types, TY_U8, 0, 0); }
+        if s_seq4(name, 117, 51, 50, 0)    { return type_store(types, TY_U32, 0, 0); }
+        if s_seq4(name, 117, 54, 52, 0)    { return type_store(types, TY_U64, 0, 0); }
+        if s_seq4(name, 105, 49, 54, 0)    { return type_store(types, TY_I16, 0, 0); }
+        if s_seq4(name, 105, 54, 52, 0)    { return type_store(types, TY_I64, 0, 0); }
+        if s_seq4(name, 102, 51, 50, 0)    { return type_store(types, TY_F32, 0, 0); }
+        if s_seq4(name, 102, 54, 52, 0)    { return type_store(types, TY_F64, 0, 0); }
+    }
+    if name.len == 5 {
+        if s_seq5(name, 105, 115, 105, 122, 101) { return type_store(types, TY_ISIZE, 0, 0); }
+        if s_seq5(name, 117, 115, 105, 122, 101) { return type_store(types, TY_USIZE, 0, 0); }
+    }
+    if name.len == 2 && name.ptr[0] == 105 && name.ptr[1] == 56 { return type_store(types, TY_I8, 0, 0); }
+    if name.len == 3 && name.ptr[0] == 117 && name.ptr[1] == 49 && name.ptr[2] == 54 { return type_store(types, TY_U16, 0, 0); }
+    // string
+    if name.len == 6 {
+        if s_seq6(name, 115, 116, 114, 105, 110, 103) {
+            let u8_t = type_store(types, TY_U8, 0, 0);
+            return type_store(types, TY_SLICE, u8_t, 0);
+        }
+    }
+    return type_store(types, TY_NAMED, 0, 0);
+}
+
+fn s_seq4(s: string, a: u8, b: u8, c: u8, d: u8) -> bool {
+    return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d;
+}
+fn s_seq5(s: string, a: u8, b: u8, c: u8, d: u8, e: u8) -> bool {
+    return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e;
+}
+fn s_seq6(s: string, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> bool {
+    return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e && s.ptr[5]==f;
+}
+
+pub fn s_sem_analyze(ctx: *SemContext) -> void {
+    // Phase 1: collect top-level declarations
+    // Phase 2: resolve function bodies
+    s_collect_top_level(ctx);
+    // Phase 2: analyze function bodies (skipping generics)
+    let decl_count = (*ctx).decls.len / DECL_BYTES;
+    let mut i: i64 = 0;
+    while i < decl_count {
+        let doff = i * DECL_BYTES;
+        let tag = decl_get_tag((*ctx).decls, doff);
+        let fname_off = decl_get_name((*ctx).decls, doff);
+        if tag == DC_FN {
+            // Check if generic (look for [ in signature)
+            // For now, just analyze all fns
+            s_push_scope(ctx);
+            let fname = str_read((*ctx).strs, fname_off);
+            // For generic fns, skip body analysis for now
+            let has_generic = 0; // simplified
+            s_pop_scope(ctx);
+        }
+        i = i + 1;
+    }
+}
+
+fn s_push_scope(ctx: *SemContext) -> void {
+    let start = (*ctx).syms.len / SYM_BYTES;
+    arena_append_i64(&ctx.scope_start, start);
+    arena_append_i64(&ctx.scope_end, start);
+    (*ctx).curr_scope = (*ctx).curr_scope + 1;
+}
+
+fn s_pop_scope(ctx: *SemContext) -> void {
+    (*ctx).curr_scope = (*ctx).curr_scope - 1;
+}
+
+fn s_collect_top_level(ctx: *SemContext) -> void {
+    let decl_count = (*ctx).decls.len / DECL_BYTES;
+    let mut i: i64 = 0;
+    while i < decl_count {
+        let doff = i * DECL_BYTES;
+        let tag = decl_get_tag((*ctx).decls, doff);
+        let name_off = decl_get_name((*ctx).decls, doff);
+        let name = str_read((*ctx).strs, name_off);
+
+        if tag == DC_FN {
+            // Register in symbol table
+            let type_id = type_store((*ctx).types, TY_NAMED, name_off, 0);
+            sym_store(&ctx.syms, name_off, SYMK_FUNCTION, type_id);
+        }
+        if tag == DC_STRUCT {
+            let type_id = type_store((*ctx).types, TY_NAMED, name_off, 0);
+            sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id);
+        }
+        if tag == DC_ENUM {
+            let type_id = type_store((*ctx).types, TY_NAMED, name_off, 0);
+            sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id);
+        }
+        i = i + 1;
+    }
+    // Update scope 0 end
+    let end = (*ctx).syms.len / SYM_BYTES;
+    // scope_end is at index curr_scope in the scope arrays
+    // For now just update the last entry
+    let last_scope_end_idx = (*ctx).scope_end.len - 8;
+    arena_write_i64(&ctx.scope_end, last_scope_end_idx, end);
+}

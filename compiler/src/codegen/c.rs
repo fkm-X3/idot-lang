@@ -10,6 +10,7 @@ pub struct CBackend {
     var_types: std::collections::HashMap<String, TypeVal>,
     defer_stack: Vec<Vec<String>>,   // per-scope deferred expressions
     in_function: bool,
+    struct_fields: std::collections::HashMap<String, Vec<(String, Type)>>,
 }
 
 impl CBackend {
@@ -24,6 +25,7 @@ impl CBackend {
             var_types: std::collections::HashMap::new(),
             defer_stack: Vec::new(),
             in_function: false,
+            struct_fields: std::collections::HashMap::new(),
         }
     }
 
@@ -82,6 +84,7 @@ impl CBackend {
                     return;
                 }
                 self.emitted_types.insert(s.name.clone());
+                self.struct_fields.insert(s.name.clone(), s.fields.iter().map(|f| (f.name.clone(), f.type_.clone())).collect());
                 self.output.push_str("typedef struct ");
                 self.output.push_str(&s.name);
                 self.output.push_str(" { ");
@@ -379,6 +382,11 @@ impl CBackend {
         self.indent += 1;
         self.in_function = true;
         self.defer_stack.push(Vec::new());
+        for p in &f.params {
+            if let Some(tv) = &p.resolved_type {
+                self.var_types.insert(p.name.clone(), tv.clone());
+            }
+        }
         if !f.body.stmts.is_empty() {
             for stmt in &f.body.stmts {
                 self.emit_stmt(stmt);
@@ -466,10 +474,6 @@ impl CBackend {
                         self.var_types.insert(v.name.clone(), tv.clone());
                     }
                     self.emit_indent();
-                    if !v.mutable {
-                        let is_ptr = matches!(v.resolved_type, Some(TypeVal::Ptr(_)) | Some(TypeVal::NullablePtr(_)) | Some(TypeVal::ManyPtr(_)) | Some(TypeVal::ConstPtr(_)));
-                        if !is_ptr { self.output.push_str("const "); }
-                    }
                     if let Some(tv) = &v.resolved_type {
                         self.emit_type_val(tv);
                     } else if let Some(type_) = &v.type_ {
@@ -481,6 +485,24 @@ impl CBackend {
                     self.output.push_str(&v.name);
                     if let Some(init) = &v.init {
                         self.output.push_str(" = ");
+                        // When initializing a Slice with an ArrayLit, emit array compound literal syntax
+                        if let Some(TypeVal::Slice(elem)) = &v.resolved_type {
+                            if let Expr::ArrayLit(items) = init {
+                                let count = items.len();
+                                self.output.push_str("{(");
+                                self.emit_type_val(elem);
+                                self.output.push_str("[]){");
+                                for (i, item) in items.iter().enumerate() {
+                                    if i > 0 { self.output.push_str(", "); }
+                                    self.emit_expr(item);
+                                }
+                                self.output.push_str("}, ");
+                                self.output.push_str(&count.to_string());
+                                self.output.push('}');
+                                self.emit_line(";");
+                                return;
+                            }
+                        }
                         self.emit_expr(init);
                     }
                     self.emit_line(";");
@@ -555,20 +577,24 @@ impl CBackend {
             Expr::IntLit(n) => self.output.push_str(&n.to_string()),
             Expr::FloatLit(n) => self.output.push_str(&n.to_string()),
             Expr::StrLit(s) => {
-                self.output.push('"');
+                let mut escaped = String::new();
                 for c in s.chars() {
                     match c {
-                        '\n' => self.output.push_str("\\n"),
-                        '\t' => self.output.push_str("\\t"),
-                        '\r' => self.output.push_str("\\r"),
-                        '\\' => self.output.push_str("\\\\"),
-                        '"' => self.output.push_str("\\\""),
-                        '\0' => self.output.push_str("\\0"),
-                        c if c.is_ascii() => self.output.push(c),
-                        _ => self.output.push(c),
+                        '\n' => escaped.push_str("\\n"),
+                        '\t' => escaped.push_str("\\t"),
+                        '\r' => escaped.push_str("\\r"),
+                        '\\' => escaped.push_str("\\\\"),
+                        '"' => escaped.push_str("\\\""),
+                        '\0' => escaped.push_str("\\0"),
+                        c if c.is_ascii() => escaped.push(c),
+                        _ => escaped.push(c),
                     }
                 }
-                self.output.push('"');
+                self.output.push_str("((IdotString){(uint8_t*)\"");
+                self.output.push_str(&escaped);
+                self.output.push_str("\", sizeof(\"");
+                self.output.push_str(&escaped);
+                self.output.push_str("\") - 1})");
             }
             Expr::CharLit(c) => {
                 self.output.push('\'');
@@ -826,19 +852,39 @@ impl CBackend {
                 self.output.push('(');
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }
-                    self.emit_expr(arg);
+                    let is_memcpy_ptr = matches!(func.as_ref(), Expr::Ident(name) if name == "memcpy" && i < 2);
+                    if is_memcpy_ptr {
+                        self.output.push_str("(uint8_t*)(");
+                        self.emit_expr(arg);
+                        self.output.push(')');
+                    } else {
+                        self.emit_expr(arg);
+                    }
                 }
                 self.output.push(')');
             }
             Expr::Index(arr, index) => {
-                self.emit_expr(arr);
-                self.output.push('[');
+                let is_slice = self.resolve_expr_type(arr).map_or(false, |t| matches!(t, TypeVal::Slice(_)));
+                if is_slice {
+                    self.emit_expr(arr);
+                    self.output.push_str(".ptr[");
+                } else {
+                    self.emit_expr(arr);
+                    self.output.push('[');
+                }
                 self.emit_expr(index);
                 self.output.push(']');
             }
             Expr::Field(obj, field) => {
-                self.emit_expr(obj);
-                self.output.push('.');
+                if self.expr_type_is_ptr(obj) {
+                    self.output.push('(');
+                    self.emit_expr(obj);
+                    self.output.push(')');
+                    self.output.push_str("->");
+                } else {
+                    self.emit_expr(obj);
+                    self.output.push('.');
+                }
                 self.output.push_str(field);
             }
             Expr::Slice(arr, start, end) => {
@@ -858,7 +904,7 @@ impl CBackend {
             }
             Expr::StructInit(name, fields) => {
                 self.output.push('(');
-                self.output.push_str(name);
+                self.emit_type_name(name);
                 self.output.push(')');
                 self.output.push('{');
                 for (i, (_, val)) in fields.iter().enumerate() {
@@ -1001,5 +1047,84 @@ impl CBackend {
         self.emit_indent();
         self.output.push_str(s);
         self.output.push('\n');
+    }
+
+    fn type_is_ptr_type(t: &Type) -> bool {
+        matches!(t, Type::Ptr(_) | Type::NullablePtr(_) | Type::ManyPtr(_) | Type::ConstPtr(_))
+    }
+
+    fn typeval_is_ptr(tv: &TypeVal) -> bool {
+        matches!(tv, TypeVal::Ptr(_) | TypeVal::NullablePtr(_) | TypeVal::ManyPtr(_) | TypeVal::ConstPtr(_))
+    }
+
+    fn type_to_typeval(t: &Type) -> TypeVal {
+        match t {
+            Type::Named(name) => TypeVal::Named(name.clone()),
+            Type::Ptr(inner) => TypeVal::Ptr(Box::new(Self::type_to_typeval(inner))),
+            Type::ConstPtr(inner) => TypeVal::ConstPtr(Box::new(Self::type_to_typeval(inner))),
+            Type::NullablePtr(inner) => TypeVal::NullablePtr(Box::new(Self::type_to_typeval(inner))),
+            Type::ManyPtr(inner) => TypeVal::ManyPtr(Box::new(Self::type_to_typeval(inner))),
+            Type::Slice(inner) => TypeVal::Slice(Box::new(Self::type_to_typeval(inner))),
+            Type::Array(n, inner) => TypeVal::Array(*n, Box::new(Self::type_to_typeval(inner))),
+            Type::Optional(inner) => TypeVal::Optional(Box::new(Self::type_to_typeval(inner))),
+            Type::ErrorUnion(inner) => TypeVal::ErrorUnion(Box::new(Self::type_to_typeval(inner))),
+            Type::Fn(params, ret) => TypeVal::Fn(
+                params.iter().map(Self::type_to_typeval).collect(),
+                ret.as_ref().map(|r| Box::new(Self::type_to_typeval(r)))
+            ),
+            Type::Inferred => unreachable!(),
+        }
+    }
+
+    fn resolve_expr_type(&self, expr: &Expr) -> Option<TypeVal> {
+        match expr {
+            Expr::Ident(name) => self.var_types.get(name).cloned(),
+            Expr::Field(obj, field) => {
+                let mut obj_type = self.resolve_expr_type(obj)?;
+                if Self::typeval_is_ptr(&obj_type) {
+                    match &mut obj_type {
+                        TypeVal::Ptr(t) | TypeVal::NullablePtr(t) | TypeVal::ManyPtr(t) | TypeVal::ConstPtr(t) => {
+                            obj_type = *t.clone();
+                        }
+                        _ => {}
+                    }
+                }
+                match &obj_type {
+                    TypeVal::Struct(fields) => {
+                        fields.iter().find(|(n, _)| n == field).map(|(_, ft)| ft.clone())
+                    }
+                    TypeVal::Named(n) => {
+                        self.struct_fields.get(n).and_then(|fs| {
+                            fs.iter().find(|(n, _)| n == field).map(|(_, ft)| Self::type_to_typeval(ft))
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            Expr::Unary(UnOp::Deref, inner) => {
+                let inner_type = self.resolve_expr_type(inner)?;
+                match &inner_type {
+                    TypeVal::Ptr(t) | TypeVal::NullablePtr(t) | TypeVal::ManyPtr(t) | TypeVal::ConstPtr(t) => Some(*t.clone()),
+                    _ => None,
+                }
+            }
+            Expr::Unary(UnOp::Addr, inner) => {
+                let inner_type = self.resolve_expr_type(inner)?;
+                Some(TypeVal::Ptr(Box::new(inner_type)))
+            }
+            Expr::Index(arr, _) => {
+                let arr_type = self.resolve_expr_type(arr)?;
+                match &arr_type {
+                    TypeVal::Slice(elem) | TypeVal::Array(_, elem) => Some(*elem.clone()),
+                    TypeVal::Ptr(elem) => Some(*elem.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn expr_type_is_ptr(&self, expr: &Expr) -> bool {
+        self.resolve_expr_type(expr).map_or(false, |t| Self::typeval_is_ptr(&t))
     }
 }
