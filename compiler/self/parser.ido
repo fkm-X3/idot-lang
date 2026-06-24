@@ -151,9 +151,11 @@ fn p_parse_fn_decl(p: *Parser, is_extern: i32, is_pub: i32) -> void {
 
     let off = decl_store((*p).decls, DC_FN);
     decl_set_name((*p).decls, off, name);
-    decl_set_data((*p).decls, off, params_children_start);
+    decl_set_data((*p).decls, off, body_off);
+    decl_set_data2((*p).decls, off, params_children_start);
     decl_set_extra((*p).decls, off, params_end);
     decl_set_extra2((*p).decls, off, ret_type);
+    decl_set_type((*p).decls, off, is_extern);
 }
 
 // === Struct ===
@@ -541,19 +543,31 @@ fn p_parse_postfix(p: *Parser) -> i64 {
     while true {
         if p_pk(p) == TK_LPAREN {
             p_ad(p);
-            let args_start = (*p).children.len / 8;
+            let off = expr_store((*p).exprs, EX_CALL);
+            expr_set_left((*p).exprs, off, left);
+            // Use types arena as temp storage for arg offsets (safe: not used during expr parsing)
+            let types_saved = (*p).types.len;
+            let mut arg_count: i64 = 0;
             if p_pk(p) != TK_RPAREN {
                 while true {
-                    children_append((*p).children, p_parse_expr(p));
+                    let arg_expr = p_parse_expr(p);
+                    arena_append_i64((*p).types, arg_expr);
+                    arg_count = arg_count + 1;
                     if p_pk(p) == TK_COMMA { p_ad(p); } else { break; }
                 }
             }
-            let args_end = (*p).children.len / 8;
             p_ex(p, TK_RPAREN);
-            let off = expr_store((*p).exprs, EX_CALL);
-            expr_set_left((*p).exprs, off, left);
-            expr_set_child((*p).exprs, off, args_start);
-            expr_set_ccount((*p).exprs, off, args_end);
+            // Copy args from temp to exprs arena (contiguous block)
+            let args_base = arena_alloc((*p).exprs, arg_count * 8);
+            let mut ai: i64 = 0;
+            while ai < arg_count {
+                let ae = arena_read_i64((*p).types, types_saved + ai * 8);
+                arena_write_i64((*p).exprs, args_base + ai * 8, ae);
+                ai = ai + 1;
+            }
+            (*p).types.len = types_saved;
+            expr_set_child((*p).exprs, off, args_base - off);
+            expr_set_ccount((*p).exprs, off, arg_count);
             left = off;
         } else if p_pk(p) == TK_LBRACK {
             p_ad(p);
@@ -777,15 +791,24 @@ fn p_parse_match_expr(p: *Parser) -> i64 {
 
 fn p_parse_block(p: *Parser) -> i64 {
     p_ex(p, TK_LBRACE);
-    let stmts_start = (*p).stmts.len / STMT_BYTES;
+    let stmts_start = (*p).stmts.len;
     while p_pk(p) != TK_RBRACE && p_pk(p) != TK_EOF {
         p_parse_stmt(p);
     }
-    let stmts_end = (*p).stmts.len / STMT_BYTES;
+    let stmts_end = (*p).stmts.len;
     p_ex(p, TK_RBRACE);
+    let stmt_count = (stmts_end - stmts_start) / STMT_BYTES;
+    let stmts_size = stmt_count * STMT_BYTES;
     let node = expr_store((*p).exprs, EX_BLOCK);
-    expr_set_child((*p).exprs, node, stmts_start);
-    expr_set_ccount((*p).exprs, node, stmts_end);
+    let stmts_off = arena_alloc((*p).exprs, stmts_size);
+    let mut si: i64 = 0;
+    while si < stmts_size {
+        arena_write_i64((*p).exprs, stmts_off + si, arena_read_i64((*p).stmts, stmts_start + si));
+        si = si + 8;
+    }
+    (*p).stmts.len = stmts_start;
+    expr_set_child((*p).exprs, node, stmts_off - node);
+    expr_set_ccount((*p).exprs, node, stmt_count);
     return node;
 }
 
@@ -794,7 +817,11 @@ fn p_parse_stmt(p: *Parser) -> void {
     if k == TK_FN || k == TK_CONST || k == TK_LET || k == TK_STRUCT
        || k == TK_ENUM || k == TK_UNION || k == TK_IMPORT || k == TK_EXTERN
        || k == TK_PUB {
+        let decls_before = (*p).decls.len;
         p_parse_decl(p);
+        if (*p).decls.len > decls_before {
+            stmt_store((*p).stmts, ST_DECL, decls_before);
+        }
         return;
     }
     if k == TK_DEFER {

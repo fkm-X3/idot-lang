@@ -279,7 +279,9 @@ const EX_OFF_TYPE: i64 = 72;      // i32 (type id)
 // padding to 80
 
 pub fn expr_store(exprs: *Arena, tag: i32) -> i64 {
-    return arena_alloc(exprs, EXPR_BYTES);
+    let off = arena_alloc(exprs, EXPR_BYTES);
+    expr_set_tag(exprs, off, tag);
+    return off;
 }
 
 pub fn expr_set_tag(exprs: *Arena, off: i64, v: i32) -> void {
@@ -408,6 +410,12 @@ pub fn decl_set_extra2(decls: *Arena, off: i64, v: i32) -> void {
 }
 pub fn decl_get_extra2(decls: *Arena, off: i64) -> i32 {
     return arena_read_i32(decls, off + 32);
+}
+pub fn decl_set_data2(decls: *Arena, off: i64, v: i32) -> void {
+    arena_write_i32(decls, off + 36, v);
+}
+pub fn decl_get_data2(decls: *Arena, off: i64) -> i32 {
+    return arena_read_i32(decls, off + 36);
 }
 
 // ==================== String Arena ====================
