@@ -1,6 +1,7 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::manifest::Manifest;
+use crate::deps;
 
 pub fn cmd_new(project_name: &str) {
     let dir = Path::new(project_name);
@@ -15,7 +16,6 @@ pub fn cmd_new(project_name: &str) {
             std::process::exit(1);
         });
 
-    // Write matrix.toml
     let manifest = Manifest::template(project_name);
     fs::write(dir.join("matrix.toml"), &manifest)
         .unwrap_or_else(|e| {
@@ -23,7 +23,6 @@ pub fn cmd_new(project_name: &str) {
             std::process::exit(1);
         });
 
-    // Write src/main.ido
     let main_src = format!(
         r#"fn main() -> i32 {{
     return 0;
@@ -42,17 +41,8 @@ pub fn cmd_new(project_name: &str) {
 }
 
 pub fn cmd_build(project_dir: &Path) {
-    let manifest_path = project_dir.join("matrix.toml");
-    if !manifest_path.exists() {
-        eprintln!("Error: no matrix.toml found in '{}'", project_dir.display());
-        std::process::exit(1);
-    }
-
-    let manifest = Manifest::load(&manifest_path)
-        .unwrap_or_else(|e| {
-            eprintln!("Error parsing matrix.toml: {}", e);
-            std::process::exit(1);
-        });
+    let manifest = load_manifest(project_dir);
+    let dep_import_dirs = resolve_deps(project_dir, &manifest);
 
     let main_ido = project_dir.join("src").join("main.ido");
     if !main_ido.exists() {
@@ -60,14 +50,13 @@ pub fn cmd_build(project_dir: &Path) {
         std::process::exit(1);
     }
 
-    // Read and compile the Idot source
     let source = fs::read_to_string(&main_ido)
         .unwrap_or_else(|e| {
             eprintln!("Error reading {}: {}", main_ido.display(), e);
             std::process::exit(1);
         });
 
-    let c_source = idot::compile_with_path(&source, Some(&main_ido));
+    let c_source = idot::compile_with_deps(&source, Some(&main_ido), &dep_import_dirs);
 
     let c_path = project_dir.join("build").join(format!("{}.c", manifest.name));
     let exe_name = if cfg!(target_os = "windows") {
@@ -111,8 +100,7 @@ pub fn cmd_build(project_dir: &Path) {
 pub fn cmd_run(project_dir: &Path) {
     cmd_build(project_dir);
 
-    let manifest_path = project_dir.join("matrix.toml");
-    let manifest = Manifest::load(&manifest_path).expect("Failed to load manifest");
+    let manifest = load_manifest(project_dir);
 
     let exe_name = if cfg!(target_os = "windows") {
         format!("{}.exe", manifest.name)
@@ -132,12 +120,14 @@ pub fn cmd_run(project_dir: &Path) {
 }
 
 pub fn cmd_test(project_dir: &Path) {
-    // Find all *_test.ido files in src/
     let src_dir = project_dir.join("src");
     if !src_dir.exists() {
         eprintln!("Error: no src/ directory found");
         std::process::exit(1);
     }
+
+    let manifest = load_manifest(project_dir);
+    let dep_import_dirs = resolve_deps(project_dir, &manifest);
 
     let test_files: Vec<_> = fs::read_dir(&src_dir)
         .unwrap()
@@ -162,7 +152,7 @@ pub fn cmd_test(project_dir: &Path) {
     for test_file in &test_files {
         println!("Testing {}...", test_file.display());
         let source = fs::read_to_string(test_file).expect("Failed to read test file");
-        let c_source = idot::compile_with_path(&source, Some(test_file));
+        let c_source = idot::compile_with_deps(&source, Some(test_file), &dep_import_dirs);
 
         let c_path = project_dir.join("build").join(
             format!("{}_test.c", test_file.file_stem().unwrap().to_str().unwrap())
@@ -198,4 +188,158 @@ pub fn cmd_test(project_dir: &Path) {
             println!("  FAILED with exit code {:?}", status.code());
         }
     }
+}
+
+pub fn cmd_add(project_dir: &Path, args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: matrix add <name> [git_url] [tag]");
+        std::process::exit(1);
+    }
+
+    let name = &args[0];
+    let manifest_path = project_dir.join("matrix.toml");
+    let mut manifest_content = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading matrix.toml: {}", e);
+            std::process::exit(1);
+        });
+
+    // Check if dependency already exists
+    if manifest_content.contains(&format!("{} = ", name)) || manifest_content.contains(&format!("{}=", name)) {
+        eprintln!("Dependency '{}' already exists in matrix.toml", name);
+        std::process::exit(1);
+    }
+
+    let dep_line = if args.len() >= 2 {
+        let url = &args[1];
+        if args.len() >= 3 {
+            let tag = &args[2];
+            format!("{} = {{ git = \"{}\", tag = \"{}\" }}\n", name, url, tag)
+        } else {
+            format!("{} = {{ git = \"{}\" }}\n", name, url)
+        }
+    } else {
+        format!("{} = {{}}\n", name)
+    };
+
+    // Insert before the last newline, or append at the end of [dependencies]
+    if manifest_content.contains("[dependencies]") {
+        // Find the [dependencies] section and add after it (or at end of section)
+        let lines: Vec<&str> = manifest_content.lines().collect();
+        let mut in_deps = false;
+        let mut insert_pos = manifest_content.len();
+
+        for (i, line) in lines.iter().enumerate() {
+            if *line == "[dependencies]" {
+                in_deps = true;
+                insert_pos = manifest_content.len();
+                continue;
+            }
+            if in_deps {
+                if line.starts_with('[') {
+                    insert_pos = lines[..i].join("\n").len() + 1;
+                    break;
+                }
+                insert_pos = lines[..=i].join("\n").len() + 1;
+            }
+        }
+
+        if in_deps {
+            manifest_content.insert_str(insert_pos, &dep_line);
+        } else {
+            // No [dependencies] section - shouldn't happen with template, but handle gracefully
+            manifest_content.push_str(&format!("\n[dependencies]\n{}", dep_line));
+        }
+    } else {
+        manifest_content.push_str(&format!("\n[dependencies]\n{}", dep_line));
+    }
+
+    fs::write(&manifest_path, &manifest_content)
+        .unwrap_or_else(|e| {
+            eprintln!("Error writing matrix.toml: {}", e);
+            std::process::exit(1);
+        });
+
+    println!("Added dependency '{}'", name);
+}
+
+pub fn cmd_remove(project_dir: &Path, name: &str) {
+    let manifest_path = project_dir.join("matrix.toml");
+    let manifest_content = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading matrix.toml: {}", e);
+            std::process::exit(1);
+        });
+
+    let lines: Vec<&str> = manifest_content.lines().collect();
+    let mut new_lines = Vec::new();
+    let mut removed = false;
+    let mut in_deps = false;
+
+    for line in &lines {
+        if *line == "[dependencies]" {
+            in_deps = true;
+            new_lines.push(line.to_string());
+            continue;
+        }
+        if in_deps {
+            if line.starts_with('[') {
+                in_deps = false;
+                new_lines.push(line.to_string());
+                continue;
+            }
+            if let Some((dep_name, _)) = line.split_once('=') {
+                if dep_name.trim() == name {
+                    removed = true;
+                    continue;
+                }
+            }
+        }
+        new_lines.push(line.to_string());
+    }
+
+    if !removed {
+        eprintln!("Dependency '{}' not found in matrix.toml", name);
+        std::process::exit(1);
+    }
+
+    fs::write(&manifest_path, new_lines.join("\n"))
+        .unwrap_or_else(|e| {
+            eprintln!("Error writing matrix.toml: {}", e);
+            std::process::exit(1);
+        });
+
+    println!("Removed dependency '{}'", name);
+}
+
+pub fn cmd_vendor(project_dir: &Path) {
+    let manifest = load_manifest(project_dir);
+    deps::vendor_all(&manifest, project_dir);
+}
+
+fn load_manifest(project_dir: &Path) -> Manifest {
+    let manifest_path = project_dir.join("matrix.toml");
+    if !manifest_path.exists() {
+        eprintln!("Error: no matrix.toml found in '{}'", project_dir.display());
+        std::process::exit(1);
+    }
+
+    Manifest::load(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error parsing matrix.toml: {}", e);
+        std::process::exit(1);
+    })
+}
+
+fn resolve_deps(project_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
+    if manifest.dependencies.is_empty() {
+        return Vec::new();
+    }
+
+    println!("Resolving dependencies...");
+    let dep_paths = deps::fetch_all(manifest, project_dir);
+    let import_dirs = deps::resolve_import_paths(&dep_paths);
+    if !import_dirs.is_empty() {
+        println!("  import paths: {:?}", import_dirs);
+    }
+    import_dirs
 }
