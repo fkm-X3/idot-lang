@@ -2,3 +2,4 @@
 * text=auto eol=lf
 
 *.idot linguist-language=Rust
+*.ido linguist-language=Rust
