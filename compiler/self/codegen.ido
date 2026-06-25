@@ -350,7 +350,8 @@ fn cg_emit_str_pool(cg: *CBackend, strs: *Arena, exprs: *Arena) -> void {
 
 // === Main codegen ===
 pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
-                   exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena) -> string {
+                    exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena) -> string {
+    print_err("early");
     cg_emit_line(cg, "#include <stddef.h>");
     cg_emit_line(cg, "#include <stdint.h>");
     cg_emit_line(cg, "#include <stdbool.h>");
@@ -358,6 +359,11 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     cg_emit_line(cg, "");
 
     let decl_count = (*decls).len / DECL_BYTES;
+    print_err("decl_count=");
+    print_err(cg_int_to_str_i64(decl_count));
+    print_err(", decls.len=");
+    print_err(cg_int_to_str_i64((*decls).len));
+    print_errln("");
 
     // First pass: emit type definitions (struct, enum, union)
     let mut i: i64 = 0;
@@ -370,10 +376,11 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         if tag == DC_STRUCT || tag == DC_ENUM || tag == DC_UNION {
             cg_emit_type_def(cg, source, strs, types, exprs, stmts, decls, children, doff, tag, name);
         }
-        i = i + 1;
-    }
+i = i + 1;
+        }
+        print_err("first pass done");
 
-    // Second pass: forward declarations for all functions
+        // Second pass: forward declarations for all functions
     i = 0;
     while i < decl_count {
         let doff = i * DECL_BYTES;
@@ -385,6 +392,7 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         }
         i = i + 1;
     }
+    print_err("second pass done");
     cg_emit_line(cg, "");
 
     // Emit string constant pool
@@ -400,6 +408,7 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         }
         i = i + 1;
     }
+    print_err("third pass done");
 
     // Fourth pass: emit full function definitions
     i = 0;
@@ -417,8 +426,9 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         }
         i = i + 1;
     }
+    print_err("fourth pass done");
 
-    let result = string{ ptr = sb_get_ptr(&(*cg).out), len = sb_get_len(&(*cg).out) };
+    let result = string{ ptr = sb_get_ptr(&((*cg).out)), len = sb_get_len(&((*cg).out)) };
     return result;
 }
 
@@ -579,22 +589,12 @@ fn cg_emit_fn(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         }
     }
 
-    cg_emit_line(cg, ") {");
-    (*cg).indent = (*cg).indent + 1;
-
+cg_emit_str(cg, ")");
     if body_off >= 0 {
-        let stmts_off = expr_get_child(exprs, body_off);
-        let stmt_count = expr_get_ccount(exprs, body_off);
-        let mut si: i64 = 0;
-        while si < stmt_count {
-            let soff = body_off + stmts_off + si * STMT_BYTES;
-            cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
-            si = si + 1;
-        }
+        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, body_off);
+    } else {
+        cg_emit_str(cg, ";");
     }
-
-    (*cg).indent = (*cg).indent - 1;
-    cg_emit_line(cg, "}");
     cg_emit_line(cg, "");
 }
 
@@ -741,14 +741,64 @@ fn cg_emit_block_as_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Ar
     (*cg).indent = (*cg).indent + 1;
     let stmts_off = expr_get_child(exprs, boff);
     let stmt_count = expr_get_ccount(exprs, boff);
-    let mut si: i64 = 0;
-    while si < stmt_count {
-        let soff = boff + stmts_off + si * STMT_BYTES;
-        cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
-        si = si + 1;
+    let stmt_idx = 0;
+    while stmt_idx < stmt_count {
+        // each entry in the block's statement list is an 8‑byte record in the expr arena
+        let soff = boff + stmts_off + stmt_idx * STMT_BYTES;
+        let stmt_tag_val = stmt_tag(exprs, soff);
+        let stmt_off = stmt_expr(exprs, soff);
+        if stmt_tag_val == ST_DECL {
+            // declaration statement (let/const)
+            let dtag = decl_get_tag(decls, stmt_off);
+            if dtag == DC_LET {
+                // ordinary let
+                let dname_off = decl_get_name(decls, stmt_off);
+                let dname = str_read(strs, dname_off);
+                let type_off = decl_get_extra(decls, stmt_off);
+                let init_off = decl_get_data(decls, stmt_off);
+                     // Emit type (includes string slice handling)
+                     cg_emit_type(cg, types, strs, type_off);
+                cg_emit_str(cg, " ");
+                cg_emit_str(cg, dname);
+                if init_off >= 0 {
+                    cg_emit_str(cg, " = ");
+                    cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, init_off);
+                }
+                cg_emit_line(cg, ";");
+            } else if dtag == DC_CONST {
+                // constant declaration
+                let dname_off = decl_get_name(decls, stmt_off);
+                let dname = str_read(strs, dname_off);
+                let type_off = decl_get_extra(decls, stmt_off);
+                let init_off = decl_get_data(decls, stmt_off);
+                cg_emit_str(cg, "const ");
+                cg_emit_type(cg, types, strs, type_off);
+                cg_emit_str(cg, " ");
+                cg_emit_str(cg, dname);
+                if init_off >= 0 {
+                    cg_emit_str(cg, " = ");
+                    cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, init_off);
+                }
+                cg_emit_line(cg, ";");
+            } else {
+                // other decls (functions, structs) ignored in block context
+            }
+        } else if stmt_tag_val == ST_EXPR {
+            // expression statement
+            cg_emit_indent(cg);
+            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, stmt_off);
+            cg_emit_line(cg, ";");
+        } else if stmt_tag_val == ST_RETURN {
+            cg_emit_indent(cg);
+            cg_emit_str(cg, "return");
+            if stmt_off >= 0 {
+                cg_emit_str(cg, " ");
+                cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, stmt_off);
+            }
+            cg_emit_line(cg, ";");
+        }
+        stmt_idx = stmt_idx + 1;
     }
-    (*cg).indent = (*cg).indent - 1;
-    cg_emit_indent(cg);
     cg_emit_str(cg, "}");
 }
 

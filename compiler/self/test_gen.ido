@@ -1,0 +1,11 @@
+import "std";
+import "codegen";
+
+pub fn main() -> i32 {
+    let cg = cg_new();
+    cg_emit_line(&cg, "Hello world\n");
+    let out_ptr = sb_get_ptr(&((*cg).out));
+    let out_len = sb_get_len(&((*cg).out));
+    write(1, out_ptr, out_len);
+    return 0;
+}

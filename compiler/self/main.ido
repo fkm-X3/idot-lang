@@ -23,22 +23,30 @@ pub fn main() -> i32 {
     let children: Arena = arena_new(65536);
 
     l_tokenize(source, &toks, &strs);
-    print("lexed ");
-    print(cg_int_to_str_i64(toks.len));
-    println(" bytes of tokens");
+    print_err("lexed ");
+    print_err(cg_int_to_str_i64(toks.len));
+    print_errln(" bytes of tokens");
 
     let p = p_parser_new(source, &toks, &strs, &types, &exprs, &stmts, &decls, &children);
     p_parse_program(&p);
-    print("parsed ");
-    print(cg_int_to_str_i64(decls.len));
-    println(" declarations");
+    print_err("parsed ");
+    print_err(cg_int_to_str_i64(decls.len));
+    print_errln(" declarations");
 
     let ctx = s_sem_new(source, &toks, &strs, &types, &exprs, &stmts, &decls, &children);
     s_sem_analyze(&ctx);
-    println("semantic analysis done");
+    print_errln("semantic analysis done");
 
     let cg: CBackend = cg_new();
+    print_err("cg_new done");
     let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children);
+    print_err("generate done");
+    print_err("C length: ");
+    print_err(cg_int_to_str_i64(output.len));
+    print_errln("");
+    print_err("decls len: ");
+    print_err(cg_int_to_str_i64(decls.len));
+    print_errln("");
 
     write(1, output.ptr, output.len);
 
