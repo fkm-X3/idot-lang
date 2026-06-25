@@ -27,10 +27,12 @@ fn p_ad(p: *Parser) -> i32 {
 }
 fn p_ex(p: *Parser, exp: i32) -> void {
     if p_pk(p) != exp {
-        print("parse error: expected ");
-        print(cg_int_to_str_i64(exp));
-        print(" got ");
-        println(cg_int_to_str_i64(p_pk(p)));
+        print_err("parse error pos=");
+        print_err(cg_int_to_str_i64((*p).pos));
+        print_err(" expected ");
+        print_err(cg_int_to_str_i64(exp));
+        print_err(" got ");
+        print_errln(cg_int_to_str_i64(p_pk(p)));
         exit(1);
     }
     (*p).pos = (*p).pos + 1;
@@ -41,6 +43,16 @@ fn p_ex_id(p: *Parser) -> i64 {
     let e = token_end((*p).tokens, off);
     let name = string{ ptr = (*p).source.ptr + s, len = e - s };
     let no = str_arena_append((*p).strs, name);
+    let pk = p_pk(p);
+    if pk != TK_IDENT {
+        print_err("EX_ID: pos=");
+        print_err(cg_int_to_str_i64((*p).pos));
+        print_err(" name='");
+        print_err(name);
+        print_err("' pk=");
+        print_err(cg_int_to_str_i64(pk));
+        print_errln("");
+    }
     p_ex(p, TK_IDENT);
     return no;
 }
@@ -53,7 +65,19 @@ pub fn p_parse_program(p: *Parser) -> void {
 }
 
 fn p_parse_decl(p: *Parser) -> void {
-    if p_pk(p) == TK_IMPORT { p_ad(p); p_ex(p, TK_STRLIT); p_ex(p, TK_SEMICOLON); return; }
+    if p_pk(p) == TK_IMPORT {
+        p_ad(p);
+        let toff = (*p).pos * TOKEN_BYTES;
+        let t_start = token_start((*p).tokens, toff);
+        let t_end = token_end((*p).tokens, toff);
+        let inner = string{ ptr = (*p).source.ptr + t_start + 1, len = t_end - t_start - 2 };
+        let str_off = str_arena_append((*p).strs, inner);
+        p_ad(p);
+        p_ex(p, TK_SEMICOLON);
+        let off = decl_store((*p).decls, DC_IMPORT);
+        decl_set_name((*p).decls, off, str_off);
+        return;
+    }
     if p_pk(p) == TK_EXTERN { p_ad(p); p_parse_fn_decl(p, true, false); p_ex(p, TK_SEMICOLON); return; }
     if p_pk(p) == TK_PUB {
         p_ad(p);
@@ -75,6 +99,8 @@ fn p_parse_decl(p: *Parser) -> void {
 
 // === Let ===
 fn p_parse_let_decl(p: *Parser) -> void {
+    print_err("LET-DECL pos=");
+    print_errln(cg_int_to_str_i64((*p).pos));
     p_ad(p); // let
     let mutbl = 0;
     if p_pk(p) == TK_MUT { p_ad(p); mutbl = 1; }
@@ -93,10 +119,14 @@ fn p_parse_let_decl(p: *Parser) -> void {
 
 // === Const ===
 fn p_parse_const_decl(p: *Parser) -> void {
+    print_err("CONST-DECL pos=");
+    print_errln(cg_int_to_str_i64((*p).pos));
     p_ad(p);
     let name = p_ex_id(p);
     let type_off: i64 = -1;
     if p_pk(p) == TK_COLON { p_ad(p); type_off = p_parse_type(p); }
+    print_err("CONST-SEQ pos=");
+    print_errln(cg_int_to_str_i64((*p).pos));
     p_ex(p, TK_EQ);
     let init = p_parse_expr(p);
     p_ex(p, TK_SEMICOLON);
@@ -111,7 +141,9 @@ fn p_parse_fn_decl(p: *Parser, is_extern: i32, is_pub: i32) -> void {
     p_ad(p); // consume TK_FN
     let name = p_ex_id(p);
     // generic params [T: type, ...]
+    let mut has_generics: i32 = 0;
     if p_pk(p) == TK_LBRACK {
+        has_generics = 1;
         p_ad(p);
         while p_pk(p) != TK_RBRACK && p_pk(p) != TK_EOF {
             // skip generic param name and constraint
@@ -120,6 +152,23 @@ fn p_parse_fn_decl(p: *Parser, is_extern: i32, is_pub: i32) -> void {
             if p_pk(p) == TK_COMMA { p_ad(p); }
         }
         p_ex(p, TK_RBRACK);
+    }
+
+    if has_generics != 0 {
+        // Skip generic functions — the idot compiler doesn't support generics
+        p_ex(p, TK_LPAREN);
+        if p_pk(p) != TK_RPAREN {
+            while true {
+                p_ex_id(p); p_ex(p, TK_COLON); p_parse_type(p);
+                if p_pk(p) == TK_EQ { p_ad(p); p_parse_expr(p); }
+                if p_pk(p) == TK_COMMA { p_ad(p); if p_pk(p) == TK_RPAREN { break; } }
+                else { break; }
+            }
+        }
+        p_ex(p, TK_RPAREN);
+        if p_pk(p) == TK_ARROW { p_ad(p); p_parse_type_or_tuple(p); }
+        if !is_extern { p_parse_block(p); }
+        return;
     }
 
     p_ex(p, TK_LPAREN);
@@ -693,25 +742,49 @@ fn p_parse_primary(p: *Parser) -> i64 {
     if k == TK_IDENT {
         let name = p_ex_id(p);
         if p_pk(p) == TK_LBRACE {
-            // Struct init: Foo{ field = val, ... }
+            let saved_pos = (*p).pos;
             p_ad(p);
-            let fields_start = (*p).children.len / 8;
-            while true {
-                if p_pk(p) == TK_RBRACE { break; }
-                let fname = p_ex_id(p);
-                p_ex(p, TK_EQ);
-                let fval = p_parse_expr(p);
-                children_append((*p).children, fname);
-                children_append((*p).children, fval);
-                if p_pk(p) == TK_COMMA { p_ad(p); } else { break; }
+            let mut is_struct_init = p_pk(p) == TK_RBRACE;
+            if !is_struct_init && p_pk(p) == TK_IDENT {
+                let peek_pos = (*p).pos + 1;
+                is_struct_init = token_kind((*p).tokens, peek_pos * TOKEN_BYTES) == TK_EQ;
+                if is_struct_init {
+                    let scan_pos: i64 = peek_pos + 1;
+                    let mut brace_depth: i64 = 1;
+                    let mut paren_depth: i64 = 0;
+                    while brace_depth > 0 && scan_pos < (*p).tokens.len / TOKEN_BYTES {
+                        let sk = token_kind((*p).tokens, scan_pos * TOKEN_BYTES);
+                        if sk == TK_LBRACE { brace_depth = brace_depth + 1; }
+                        if sk == TK_RBRACE { brace_depth = brace_depth - 1; }
+                        if sk == TK_LPAREN { paren_depth = paren_depth + 1; }
+                        if sk == TK_RPAREN { paren_depth = paren_depth - 1; }
+                        if sk == TK_SEMICOLON && brace_depth == 1 && paren_depth == 0 { is_struct_init = false; break; }
+                        if sk == TK_COMMA && brace_depth == 1 && paren_depth == 0 { break; }
+                        scan_pos = scan_pos + 1;
+                    }
+                }
             }
-            let fields_end = (*p).children.len / 8;
-            p_ex(p, TK_RBRACE);
-            let node = expr_store((*p).exprs, EX_STRUCTINIT);
-            expr_set_name((*p).exprs, node, name);
-            expr_set_child((*p).exprs, node, fields_start);
-            expr_set_ccount((*p).exprs, node, fields_end);
-            return node;
+            (*p).pos = saved_pos;
+            if is_struct_init {
+                p_ad(p);
+                let fields_start = (*p).children.len / 8;
+                while true {
+                    if p_pk(p) == TK_RBRACE { break; }
+                    let fname = p_ex_id(p);
+                    p_ex(p, TK_EQ);
+                    let fval = p_parse_expr(p);
+                    children_append((*p).children, fname);
+                    children_append((*p).children, fval);
+                    if p_pk(p) == TK_COMMA { p_ad(p); } else { break; }
+                }
+                let fields_end = (*p).children.len / 8;
+                p_ex(p, TK_RBRACE);
+                let node = expr_store((*p).exprs, EX_STRUCTINIT);
+                expr_set_name((*p).exprs, node, name);
+                expr_set_child((*p).exprs, node, fields_start);
+                expr_set_ccount((*p).exprs, node, fields_end);
+                return node;
+            }
         }
         let node = expr_store((*p).exprs, EX_IDENT);
         expr_set_name((*p).exprs, node, name);
@@ -770,8 +843,14 @@ fn p_parse_for_expr(p: *Parser) -> i64 {
 }
 
 fn p_parse_while_expr(p: *Parser) -> i64 {
+    print_err("WHILE pos=");
+    print_errln(cg_int_to_str_i64((*p).pos));
     p_ad(p);
+    print_err("WHILE-COND pos=");
+    print_errln(cg_int_to_str_i64((*p).pos));
     let cond = p_parse_expr(p);
+    print_err("WHILE-BODY pos=");
+    print_errln(cg_int_to_str_i64((*p).pos));
     let body = p_parse_block(p);
     let node = expr_store((*p).exprs, EX_WHILE);
     expr_set_left((*p).exprs, node, cond);
@@ -819,9 +898,17 @@ fn p_parse_match_expr(p: *Parser) -> i64 {
 }
 
 fn p_parse_block(p: *Parser) -> i64 {
+    print_err("BLOCK pos=");
+    print_err(cg_int_to_str_i64((*p).pos));
+    print_err(" pk=");
+    print_errln(cg_int_to_str_i64(p_pk(p)));
     p_ex(p, TK_LBRACE);
     let stmts_start = (*p).stmts.len;
     while p_pk(p) != TK_RBRACE && p_pk(p) != TK_EOF {
+        print_err("BLOCK-ITER pos=");
+        print_err(cg_int_to_str_i64((*p).pos));
+        print_err(" pk=");
+        print_errln(cg_int_to_str_i64(p_pk(p)));
         p_parse_stmt(p);
     }
     let stmts_end = (*p).stmts.len;
@@ -843,6 +930,10 @@ fn p_parse_block(p: *Parser) -> i64 {
 
 fn p_parse_stmt(p: *Parser) -> void {
     let k = p_pk(p);
+    if k == TK_LET {
+        print_err("STMT-LET pos=");
+        print_errln(cg_int_to_str_i64((*p).pos));
+    }
     if k == TK_FN || k == TK_CONST || k == TK_LET || k == TK_STRUCT
        || k == TK_ENUM || k == TK_UNION || k == TK_IMPORT || k == TK_EXTERN
        || k == TK_PUB {

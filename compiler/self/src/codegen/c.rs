@@ -159,6 +159,10 @@ impl CBackend {
         self.emit_line("#include <fcntl.h>"); // for O_* flags
         self.emit_line("#include <stdio.h>"); // for SEEK_* constants
         self.emit_line("typedef struct { uint8_t* ptr; size_t len; } IdotString;");
+        self.emit_line("static int __ido_argc;");
+        self.emit_line("static uint8_t** __ido_argv;");
+        self.emit_line("int __ido_get_argc(void) { return __ido_argc; }");
+        self.emit_line("uint8_t* __ido_get_argv(int i) { return __ido_argv[i]; }");
         self.emit_line("");
     }
 
@@ -369,6 +373,10 @@ impl CBackend {
     }
 
     fn emit_fn_sig(&mut self, f: &FnDecl) {
+        if f.name == "main" {
+            self.output.push_str("int main(int argc, char** argv)");
+            return;
+        }
         if let Some(ret) = &f.resolved_ret_type {
             self.emit_type_val(ret);
         } else if let Some(ret) = &f.return_type {
@@ -402,6 +410,10 @@ impl CBackend {
         self.indent += 1;
         self.in_function = true;
         self.defer_stack.push(Vec::new());
+        if f.name == "main" {
+            self.emit_line("__ido_argc = argc;");
+            self.emit_line("__ido_argv = (uint8_t**)argv;");
+        }
         for p in &f.params {
             if let Some(tv) = &p.resolved_type {
                 self.var_types.insert(p.name.clone(), tv.clone());

@@ -18,7 +18,7 @@ pub fn compile(source: &str) -> String {
 pub fn compile_with_path(source: &str, file_path: Option<&Path>) -> String {
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
-        let lib_dir = Path::new(manifest_dir).parent().unwrap().join("lib");
+        let lib_dir = Path::new(manifest_dir).parent().unwrap().parent().unwrap().join("lib");
         if lib_dir.exists() {
             include_dirs.push(lib_dir.clone());
             let std_dir = lib_dir.join("std");

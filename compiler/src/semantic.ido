@@ -36,19 +36,21 @@ pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
         generic_struct_decls = arena_new(4096), mono_counter = 0,
         mono_fns = arena_new(4096),
     };
-    // Register built-in types
-    let builtins = ["void", "bool", "i8", "i16", "i32", "i64",
-                    "u8", "u16", "u32", "u64", "isize", "usize",
-                    "f32", "f64", "string"];
-    let mut i: i64 = 0;
-    while i < 15 {
-        let name = builtins[i];
-        let type_id = s_resolve_named_type(name, ctx.types);
-        // Append name + type_id to syms
-        let name_off = str_arena_append(strs, name);
-        sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id);
-        i = i + 1;
-    }
+    { let name = "void"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "bool"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "i8"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "i16"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "i32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "i64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "u8"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "u16"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "u32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "u64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "isize"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "usize"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "f32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "f64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "string"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
     // Record scope 0 boundaries
     arena_append_i64(&ctx.scope_start, 0);
     arena_append_i64(&ctx.scope_end, ctx.syms.len / SYM_BYTES);
@@ -73,6 +75,7 @@ fn s_resolve_named_type(name: string, types: *Arena) -> i32 {
         if s_seq5(name, 117, 115, 105, 122, 101) { return type_store(types, TY_USIZE, 0, 0); }
     }
     if name.len == 2 && name.ptr[0] == 105 && name.ptr[1] == 56 { return type_store(types, TY_I8, 0, 0); }
+    if name.len == 2 && name.ptr[0] == 117 && name.ptr[1] == 56 { return type_store(types, TY_U8, 0, 0); }
     if name.len == 3 && name.ptr[0] == 117 && name.ptr[1] == 49 && name.ptr[2] == 54 { return type_store(types, TY_U16, 0, 0); }
     // string
     if name.len == 6 {

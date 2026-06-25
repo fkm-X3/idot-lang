@@ -38,3 +38,7 @@ extern fn system(command: *u8) -> i32;
 
 // File size (POSIX)
 extern fn lseek(fd: i32, offset: isize, whence: i32) -> isize;
+
+// Argc/argv (provided by codegen preamble)
+extern fn __ido_get_argc() -> i32;
+extern fn __ido_get_argv(i: i32) -> *u8;

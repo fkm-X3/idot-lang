@@ -57,7 +57,7 @@ fn do_compile(input_path_str: &str, emit_c: bool) {
         });
 
     if emit_c {
-        println!("Wrote C output to {}", c_path.display());
+        eprintln!("Wrote C output to {}", c_path.display());
         return;
     }
 
