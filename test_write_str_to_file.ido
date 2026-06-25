@@ -1,0 +1,7 @@
+// Test write_str_to_file
+import "std";
+
+pub fn main() -> i32 {
+    write_str_to_file("out.txt", "Hello, world!\n");
+    return 0;
+}

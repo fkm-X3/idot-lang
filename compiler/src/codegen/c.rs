@@ -150,6 +150,14 @@ impl CBackend {
         self.emit_line("#include <stddef.h>");
         self.emit_line("#include <stdint.h>");
         self.emit_line("#include <stdbool.h>");
+        // Include platform-specific headers for POSIX I/O and O_* flags
+        self.emit_line("#if defined(_WIN32) || defined(_WIN64)");
+        self.emit_line("#include <io.h>"); // _open, _write, _close on Windows (mingw/MSVC)
+        self.emit_line("#else");
+        self.emit_line("#include <unistd.h>"); // for open, write, close, read, lseek
+        self.emit_line("#endif");
+        self.emit_line("#include <fcntl.h>"); // for O_* flags
+        self.emit_line("#include <stdio.h>"); // for SEEK_* constants
         self.emit_line("typedef struct { uint8_t* ptr; size_t len; } IdotString;");
         self.emit_line("");
     }
@@ -343,9 +351,21 @@ impl CBackend {
     // === Declarations ===
 
     fn emit_extern_fn(&mut self, f: &FnDecl) {
-        self.output.push_str("extern ");
-        self.emit_fn_sig(f);
-        self.emit_line(";");
+        // Certain POSIX I/O functions have definitions in <io.h> on Windows, which
+        // cause conflicting declarations if we emit them as extern. Guard those
+        // declarations with a platform check.
+        const POSIX_IO_FUNCS: [&str; 5] = ["write", "read", "open", "close", "lseek"];
+        if POSIX_IO_FUNCS.contains(&f.name.as_str()) {
+            self.emit_line("#if !defined(_WIN32) && !defined(_WIN64)");
+            self.output.push_str("extern ");
+            self.emit_fn_sig(f);
+            self.emit_line(";");
+            self.emit_line("#endif");
+        } else {
+            self.output.push_str("extern ");
+            self.emit_fn_sig(f);
+            self.emit_line(";");
+        }
     }
 
     fn emit_fn_sig(&mut self, f: &FnDecl) {
@@ -445,6 +465,12 @@ impl CBackend {
     }
 
     fn emit_global_const(&mut self, c: &ConstDecl) {
+        // Guard platform-specific constants that conflict with macros on Windows
+        const WIN_CONFLICT_CONSTS: [&str; 9] = ["O_RDONLY", "O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "SEEK_SET", "SEEK_CUR", "SEEK_END"];
+        let should_guard = WIN_CONFLICT_CONSTS.contains(&c.name.as_str());
+        if should_guard {
+            self.emit_line("#if !defined(_WIN32) && !defined(_WIN64)");
+        }
         if let Some(tv) = &c.resolved_type {
             self.var_types.insert(c.name.clone(), tv.clone());
         }
@@ -461,6 +487,9 @@ impl CBackend {
         self.output.push_str(" = ");
         self.emit_expr(&c.init);
         self.emit_line(";");
+        if should_guard {
+            self.emit_line("#endif");
+        }
     }
 
     // === Statements ===
