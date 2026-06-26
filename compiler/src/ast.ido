@@ -84,6 +84,7 @@ const EX_FIELD: i32 = 17; const EX_SLICE: i32 = 18;
 const EX_STRUCTINIT: i32 = 19; const EX_ARRAYLIT: i32 = 20;
 const EX_DEREF: i32 = 21; const EX_TRY: i32 = 22;
 const EX_CATCH: i32 = 23; const EX_ORELSE: i32 = 24;
+const EX_COMPTIME: i32 = 25; const EX_WHEN: i32 = 26;
 
 // ==================== Stmt Tags ====================
 const ST_DECL: i32 = 0; const ST_EXPR: i32 = 1;
@@ -96,6 +97,25 @@ const DC_LET: i32 = 0; const DC_CONST: i32 = 1;
 const DC_FN: i32 = 2; const DC_STRUCT: i32 = 3;
 const DC_ENUM: i32 = 4; const DC_UNION: i32 = 5;
 const DC_IMPORT: i32 = 6;
+
+// Generic param encoding in decl type_id:
+// Bit 0: is_extern (for DC_FN)
+// Bit 8: GENERIC_FLAG
+// Bits 16-31: generic param count
+const GENERIC_FLAG: i32 = 256;
+const GENERIC_COUNT_SHIFT: i32 = 16;
+
+pub fn decl_is_generic(type_id: i32) -> i32 {
+    return (type_id & GENERIC_FLAG) != 0;
+}
+
+pub fn decl_genparam_count(type_id: i32) -> i32 {
+    return (type_id >> GENERIC_COUNT_SHIFT) & 0xFFFF;
+}
+
+pub fn decl_make_type_id(is_extern: i32, is_generic: i32, genparam_count: i32) -> i32 {
+    return is_extern | (if is_generic != 0 { GENERIC_FLAG } else { 0 }) | (genparam_count << GENERIC_COUNT_SHIFT);
+}
 
 // ==================== Struct Layout: Arena-based storage ====================
 // All AST data is stored in flat arenas (byte arrays).

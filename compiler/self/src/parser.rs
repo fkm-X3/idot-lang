@@ -941,7 +941,10 @@ impl Parser {
 
             _ => {
                 let expr = self.parse_expr();
-                self.expect(TokenKind::Semicolon);
+                // Semicolon is optional for trailing expressions (block return value)
+                if *self.peek() == TokenKind::Semicolon {
+                    self.skip();
+                }
                 Stmt::Expr(expr)
             }
         }

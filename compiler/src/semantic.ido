@@ -1,5 +1,6 @@
 import "std";
 import "ast";
+import "codegen";
 
 struct SemContext {
     source: string,
@@ -23,6 +24,8 @@ struct SemContext {
     mono_counter: i32,
     // Monomorphized fns to add
     mono_fns: Arena,
+    // Error tracking
+    errors: Arena,
 }
 
 pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
@@ -34,7 +37,7 @@ pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
         scope_start = arena_new(256), scope_end = arena_new(256),
         curr_scope = 0, generic_fn_decls = arena_new(4096),
         generic_struct_decls = arena_new(4096), mono_counter = 0,
-        mono_fns = arena_new(4096),
+        mono_fns = arena_new(4096), errors = arena_new(1024),
     };
     { let name = "void"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
     { let name = "bool"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
@@ -97,29 +100,24 @@ fn s_seq6(s: string, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> bool {
     return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d && s.ptr[4]==e && s.ptr[5]==f;
 }
 
-pub fn s_sem_analyze(ctx: *SemContext) -> void {
-    // Phase 1: collect top-level declarations
-    // Phase 2: resolve function bodies
-    s_collect_top_level(ctx);
-    // Phase 2: analyze function bodies (skipping generics)
-    let decl_count = (*ctx).decls.len / DECL_BYTES;
+fn s_str_eq(a: string, b: string) -> i32 {
+    if a.len != b.len { return 0; }
     let mut i: i64 = 0;
-    while i < decl_count {
-        let doff = i * DECL_BYTES;
-        let tag = decl_get_tag((*ctx).decls, doff);
-        let fname_off = decl_get_name((*ctx).decls, doff);
-        if tag == DC_FN {
-            // Check if generic (look for [ in signature)
-            // For now, just analyze all fns
-            s_push_scope(ctx);
-            let fname = str_read((*ctx).strs, fname_off);
-            // For generic fns, skip body analysis for now
-            let has_generic = 0; // simplified
-            s_pop_scope(ctx);
-        }
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] { return 0; }
         i = i + 1;
     }
+    return 1;
 }
+
+fn s_name_matches(strs: *Arena, name_off: i64, target: string) -> i32 {
+    let name = str_read(strs, name_off);
+    return s_str_eq(name, target);
+}
+
+// ====================================================================
+// Scope management
+// ====================================================================
 
 fn s_push_scope(ctx: *SemContext) -> void {
     let start = (*ctx).syms.len / SYM_BYTES;
@@ -129,7 +127,49 @@ fn s_push_scope(ctx: *SemContext) -> void {
 }
 
 fn s_pop_scope(ctx: *SemContext) -> void {
+    let end = (*ctx).syms.len / SYM_BYTES;
+    let last_scope_idx = ((*ctx).scope_end.len / 8) - 1;
+    arena_write_i64(&ctx.scope_end, last_scope_idx * 8, end);
     (*ctx).curr_scope = (*ctx).curr_scope - 1;
+}
+
+fn s_find_sym(ctx: *SemContext, name_off: i64) -> i64 {
+    let total = (*ctx).syms.len / SYM_BYTES;
+    if total == 0 { return -1; }
+    let target_name = str_read((*ctx).strs, name_off);
+    let mut i: i64 = total - 1;
+    while i >= 0 {
+        let soff = i * SYM_BYTES;
+        let sn = sym_name(&(*ctx).syms, soff);
+        let sn_str = str_read((*ctx).strs, sn);
+        if s_str_eq(target_name, sn_str) { return soff; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn s_find_sym_by_name(strs: *Arena, syms: *Arena, name: string) -> i64 {
+    let total = (*syms).len / SYM_BYTES;
+    if total == 0 { return -1; }
+    let mut i: i64 = total - 1;
+    while i >= 0 {
+        let soff = i * SYM_BYTES;
+        let sn = sym_name(syms, soff);
+        let sname = str_read(strs, sn);
+        if s_str_eq(sname, name) { return soff; }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// ====================================================================
+// Phase 1: Collect top-level declarations
+// ====================================================================
+
+pub fn s_sem_analyze(ctx: *SemContext) -> void {
+    s_collect_top_level(ctx);
+    s_analyze_bodies(ctx);
+    s_inject_mono_fns(ctx);
 }
 
 fn s_collect_top_level(ctx: *SemContext) -> void {
@@ -139,27 +179,875 @@ fn s_collect_top_level(ctx: *SemContext) -> void {
         let doff = i * DECL_BYTES;
         let tag = decl_get_tag((*ctx).decls, doff);
         let name_off = decl_get_name((*ctx).decls, doff);
-        let name = str_read((*ctx).strs, name_off);
+        let type_id = decl_get_type((*ctx).decls, doff);
+        let is_gen = decl_is_generic(type_id);
 
         if tag == DC_FN {
-            // Register in symbol table
-            let type_id = type_store((*ctx).types, TY_NAMED, name_off, 0);
-            sym_store(&ctx.syms, name_off, SYMK_FUNCTION, type_id);
-        }
-        if tag == DC_STRUCT {
-            let type_id = type_store((*ctx).types, TY_NAMED, name_off, 0);
-            sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id);
-        }
-        if tag == DC_ENUM {
-            let type_id = type_store((*ctx).types, TY_NAMED, name_off, 0);
-            sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id);
+            if is_gen != 0 {
+                // Store generic function template
+                arena_append_i64(&ctx.generic_fn_decls, doff);
+            } else {
+                let ret_type = decl_get_extra2((*ctx).decls, doff);
+                let fid = type_store((*ctx).types, TY_NAMED, name_off, 0);
+                sym_store(&ctx.syms, name_off, SYMK_FUNCTION, fid);
+            }
+        } else if tag == DC_STRUCT {
+            if is_gen != 0 {
+                // Store generic struct template
+                arena_append_i64(&ctx.generic_struct_decls, doff);
+            } else {
+                sym_store(&ctx.syms, name_off, SYMK_TYPE, 0);
+            }
+        } else if tag == DC_ENUM {
+            sym_store(&ctx.syms, name_off, SYMK_TYPE, 0);
         }
         i = i + 1;
     }
     // Update scope 0 end
     let end = (*ctx).syms.len / SYM_BYTES;
-    // scope_end is at index curr_scope in the scope arrays
-    // For now just update the last entry
     let last_scope_end_idx = (*ctx).scope_end.len - 8;
-    arena_write_i64(&ctx.scope_end, last_scope_end_idx, end);
+    if last_scope_end_idx >= 0 {
+        arena_write_i64(&ctx.scope_end, last_scope_end_idx, end);
+    }
+}
+
+// ====================================================================
+// Phase 2: Analyze all non-generic function bodies
+// ====================================================================
+
+fn s_analyze_bodies(ctx: *SemContext) -> void {
+    let decl_count = (*ctx).decls.len / DECL_BYTES;
+    let mut i: i64 = 0;
+    while i < decl_count {
+        let doff = i * DECL_BYTES;
+        let tag = decl_get_tag((*ctx).decls, doff);
+        let type_id = decl_get_type((*ctx).decls, doff);
+        if tag == DC_FN && decl_is_generic(type_id) == 0 {
+            let body_off = decl_get_data((*ctx).decls, doff);
+            if body_off >= 0 {
+                s_analyze_expr(ctx, body_off);
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// === Statement analysis ===
+
+fn s_analyze_stmt(ctx: *SemContext, soff: i64) -> void {
+    let st_tag = stmt_tag((*ctx).exprs, soff);
+    let st_expr_off = stmt_expr((*ctx).exprs, soff);
+
+    if st_tag == ST_EXPR {
+        let repl = s_analyze_expr(ctx, st_expr_off);
+        if repl != st_expr_off {
+            // Replace the statement's expression with the evaluated result
+            arena_write_i64((*ctx).exprs, soff + 4, repl);
+        }
+    } else if st_tag == ST_RETURN {
+        if st_expr_off >= 0 {
+            s_analyze_expr(ctx, st_expr_off);
+        }
+    } else if st_tag == ST_DECL {
+        let doff = st_expr_off;
+        let dtag = decl_get_tag((*ctx).decls, doff);
+        if dtag == DC_LET || dtag == DC_CONST {
+            let init_off = decl_get_data((*ctx).decls, doff);
+            if init_off >= 0 {
+                s_analyze_expr(ctx, init_off);
+            }
+            // Register local variable in symbol table
+            let name_off = decl_get_name((*ctx).decls, doff);
+            let type_off = decl_get_extra((*ctx).decls, doff);
+            sym_store(&ctx.syms, name_off, SYMK_VARIABLE, type_off);
+        }
+    } else if st_tag == ST_DEFER || st_tag == ST_ERRDEFER {
+        if st_expr_off >= 0 {
+            s_analyze_expr(ctx, st_expr_off);
+        }
+    }
+}
+
+// === Expression analysis (returns replacement expr offset if comptime-folded) ===
+
+fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
+    let tag = expr_get_tag((*ctx).exprs, eoff);
+
+    if tag == EX_BLOCK {
+        let stmts_off = expr_get_child((*ctx).exprs, eoff);
+        let stmt_count = expr_get_ccount((*ctx).exprs, eoff);
+        s_push_scope(ctx);
+        let mut si: i64 = 0;
+        while si < stmt_count {
+            let soff = eoff + stmts_off + si * STMT_BYTES;
+            s_analyze_stmt(ctx, soff);
+            si = si + 1;
+        }
+        s_pop_scope(ctx);
+        return eoff;
+    }
+
+    if tag == EX_IF {
+        let cond = expr_get_left((*ctx).exprs, eoff);
+        let then_block = expr_get_right((*ctx).exprs, eoff);
+        let else_expr = expr_get_extra((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, cond);
+        s_analyze_expr(ctx, then_block);
+        if else_expr >= 0 {
+            s_analyze_expr(ctx, else_expr);
+        }
+        return eoff;
+    }
+
+    if tag == EX_FOR {
+        let iter = expr_get_left((*ctx).exprs, eoff);
+        let body = expr_get_right((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, iter);
+        s_push_scope(ctx);
+        s_analyze_expr(ctx, body);
+        s_pop_scope(ctx);
+        return eoff;
+    }
+
+    if tag == EX_WHILE {
+        let cond = expr_get_left((*ctx).exprs, eoff);
+        let body = expr_get_right((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, cond);
+        s_analyze_expr(ctx, body);
+        return eoff;
+    }
+
+    if tag == EX_MATCH {
+        let match_expr = expr_get_left((*ctx).exprs, eoff);
+        let arms_start = expr_get_child((*ctx).exprs, eoff);
+        let arms_end = expr_get_ccount((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, match_expr);
+        let mut ai: i64 = arms_start;
+        while ai < arms_end {
+            let pat_start = children_read((*ctx).children, ai * 8);
+            let pat_end = children_read((*ctx).children, (ai + 1) * 8);
+            let arm_body = children_read((*ctx).children, (ai + 2) * 8);
+            let mut pi: i64 = pat_start;
+            while pi < pat_end {
+                let pat_expr = children_read((*ctx).children, pi * 8);
+                s_analyze_expr(ctx, pat_expr);
+                pi = pi + 1;
+            }
+            s_analyze_expr(ctx, arm_body);
+            ai = ai + 3;
+        }
+        let wildcard = expr_get_extra((*ctx).exprs, eoff);
+        if wildcard >= 0 {
+            s_analyze_expr(ctx, wildcard);
+        }
+        return eoff;
+    }
+
+    if tag == EX_UNARY {
+        let inner = expr_get_left((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, inner);
+        return eoff;
+    }
+
+    if tag == EX_BINARY {
+        let left = expr_get_left((*ctx).exprs, eoff);
+        let right = expr_get_right((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, left);
+        s_analyze_expr(ctx, right);
+        return eoff;
+    }
+
+    if tag == EX_ASSIGN {
+        let lhs = expr_get_left((*ctx).exprs, eoff);
+        let rhs = expr_get_right((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, lhs);
+        s_analyze_expr(ctx, rhs);
+        return eoff;
+    }
+
+    if tag == EX_CALL {
+        let func = expr_get_left((*ctx).exprs, eoff);
+        let child_off = expr_get_child((*ctx).exprs, eoff);
+        let arg_count = expr_get_ccount((*ctx).exprs, eoff);
+        // Analyze arguments first
+        let mut ai: i64 = 0;
+        while ai < arg_count {
+            let arg_expr = children_read((*ctx).children, (child_off + ai) * 8);
+            s_analyze_expr(ctx, arg_expr);
+            ai = ai + 1;
+        }
+        // Check if this is a call to a generic function — monomorphize
+        if expr_get_tag((*ctx).exprs, func) == EX_IDENT {
+            let fname_off = expr_get_name((*ctx).exprs, func);
+            let fname = str_read((*ctx).strs, fname_off);
+            // Check for @compileLog / @compileError
+            if fname.len > 1 && fname.ptr[0] == 64 {
+                // @compileLog — print message at compile time
+                if fname.len >= 11 {
+                    let mut is_log: i32 = 1;
+                    if fname.ptr[1] != 99 { is_log = 0; }
+                    if fname.ptr[2] != 111 { is_log = 0; }
+                    if fname.ptr[3] != 109 { is_log = 0; }
+                    if fname.ptr[4] != 112 { is_log = 0; }
+                    if fname.ptr[5] != 105 { is_log = 0; }
+                    if fname.ptr[6] != 108 { is_log = 0; }
+                    if fname.ptr[7] != 101 { is_log = 0; }
+                    if fname.ptr[8] != 76 { is_log = 0; }
+                    if fname.ptr[9] != 111 { is_log = 0; }
+                    if fname.ptr[10] != 103 { is_log = 0; }
+                    if is_log != 0 && arg_count > 0 {
+                        let msg_expr = children_read((*ctx).children, child_off * 8);
+                        if expr_get_tag((*ctx).exprs, msg_expr) == EX_STRLIT {
+                            let msg_off = expr_get_name((*ctx).exprs, msg_expr);
+                            let msg = str_read((*ctx).strs, msg_off);
+                            print_err("@compileLog: ");
+                            print_errln(msg);
+                        }
+                    }
+                }
+                if fname.len >= 12 {
+                    let mut is_err: i32 = 1;
+                    if fname.ptr[1] != 99 { is_err = 0; }
+                    if fname.ptr[2] != 111 { is_err = 0; }
+                    if fname.ptr[3] != 109 { is_err = 0; }
+                    if fname.ptr[4] != 112 { is_err = 0; }
+                    if fname.ptr[5] != 105 { is_err = 0; }
+                    if fname.ptr[6] != 108 { is_err = 0; }
+                    if fname.ptr[7] != 101 { is_err = 0; }
+                    if fname.ptr[8] != 69 { is_err = 0; }
+                    if fname.ptr[9] != 114 { is_err = 0; }
+                    if fname.ptr[10] != 114 { is_err = 0; }
+                    if fname.ptr[11] != 111 { is_err = 0; }
+                    if fname.ptr[12] != 114 { is_err = 0; }
+                    if is_err != 0 && arg_count > 0 {
+                        let msg_expr = children_read((*ctx).children, child_off * 8);
+                        if expr_get_tag((*ctx).exprs, msg_expr) == EX_STRLIT {
+                            let msg_off = expr_get_name((*ctx).exprs, msg_expr);
+                            let msg = str_read((*ctx).strs, msg_off);
+                            print_err("@compileError: ");
+                            print_errln(msg);
+                            exit(1);
+                        }
+                    }
+                }
+                // Replace @ builtin call with int literal 0
+                let node = expr_store((*ctx).exprs, EX_INTLIT);
+                expr_set_int((*ctx).exprs, node, 0);
+                return node;
+            }
+            // Try monomorphization
+            let mangled = s_try_monomorphize_fn(ctx, fname_off, eoff);
+            if mangled >= 0 {
+                // Rewrite call: change the function name to the mangled name
+                expr_set_name((*ctx).exprs, func, mangled);
+            }
+        }
+        return eoff;
+    }
+
+    if tag == EX_INDEX {
+        let arr = expr_get_left((*ctx).exprs, eoff);
+        let index = expr_get_right((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, arr);
+        s_analyze_expr(ctx, index);
+        return eoff;
+    }
+
+    if tag == EX_FIELD {
+        let obj = expr_get_left((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, obj);
+        return eoff;
+    }
+
+    if tag == EX_SLICE {
+        let arr = expr_get_left((*ctx).exprs, eoff);
+        let end = expr_get_right((*ctx).exprs, eoff);
+        let start = expr_get_extra((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, arr);
+        if end >= 0 { s_analyze_expr(ctx, end); }
+        if start >= 0 { s_analyze_expr(ctx, start); }
+        return eoff;
+    }
+
+    if tag == EX_STRUCTINIT {
+        let fields_start = expr_get_child((*ctx).exprs, eoff);
+        let fields_end = expr_get_ccount((*ctx).exprs, eoff);
+        let mut fi: i64 = fields_start;
+        while fi < fields_end {
+            fi = fi + 1; // skip field name
+            let fval = children_read((*ctx).children, fi * 8);
+            s_analyze_expr(ctx, fval);
+            fi = fi + 1;
+        }
+        return eoff;
+    }
+
+    if tag == EX_ARRAYLIT {
+        let child = expr_get_child((*ctx).exprs, eoff);
+        let ccount = expr_get_ccount((*ctx).exprs, eoff);
+        let mut ai: i64 = child;
+        while ai < ccount {
+            let item = children_read((*ctx).children, ai * 8);
+            s_analyze_expr(ctx, item);
+            ai = ai + 1;
+        }
+        return eoff;
+    }
+
+    if tag == EX_DEREF || tag == EX_TRY {
+        let inner = expr_get_left((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, inner);
+        return eoff;
+    }
+
+    if tag == EX_CATCH || tag == EX_ORELSE {
+        let left = expr_get_left((*ctx).exprs, eoff);
+        let right = expr_get_right((*ctx).exprs, eoff);
+        s_analyze_expr(ctx, left);
+        s_analyze_expr(ctx, right);
+        return eoff;
+    }
+
+    if tag == EX_COMPTIME {
+        let block = expr_get_left((*ctx).exprs, eoff);
+        let result = s_eval_comptime(ctx, block);
+        // Replace the comptime expression with the evaluated result
+        if result >= 0 { return result; }
+        return eoff;
+    }
+
+    if tag == EX_WHEN {
+        let cond = expr_get_left((*ctx).exprs, eoff);
+        let then_block = expr_get_right((*ctx).exprs, eoff);
+        let else_block = expr_get_extra((*ctx).exprs, eoff);
+        let branch = s_eval_when(ctx, cond, then_block, else_block);
+        if branch >= 0 { return branch; }
+        return eoff;
+    }
+
+    // Literals, identifiers: no analysis needed
+    return eoff;
+}
+
+// ====================================================================
+// Comptime evaluation
+// ====================================================================
+
+fn s_eval_comptime(ctx: *SemContext, block: i64) -> i64 {
+    // Evaluate a comptime block — walk statements, return last expression value
+    if block < 0 { return -1; }
+    let tag = expr_get_tag((*ctx).exprs, block);
+    if tag != EX_BLOCK { return -1; }
+    let stmts_off = expr_get_child((*ctx).exprs, block);
+    let stmt_count = expr_get_ccount((*ctx).exprs, block);
+    let mut last_result: i64 = -1;
+    let mut si: i64 = 0;
+    while si < stmt_count {
+        let soff = block + stmts_off + si * STMT_BYTES;
+        let st_tag = stmt_tag((*ctx).exprs, soff);
+        let st_expr = stmt_expr((*ctx).exprs, soff);
+        if st_tag == ST_EXPR {
+            last_result = s_try_fold_expr(ctx, st_expr);
+        } else if st_tag == ST_RETURN {
+            if st_expr >= 0 {
+                last_result = s_try_fold_expr(ctx, st_expr);
+            }
+        } else if st_tag == ST_DECL {
+            let doff = st_expr;
+            let dtag = decl_get_tag((*ctx).decls, doff);
+            if dtag == DC_CONST {
+                let init_off = decl_get_data((*ctx).decls, doff);
+                if init_off >= 0 {
+                    last_result = s_try_fold_expr(ctx, init_off);
+                }
+            }
+        }
+        si = si + 1;
+    }
+    if last_result >= 0 {
+        return last_result;
+    }
+    // Default: return 0
+    let node = expr_store((*ctx).exprs, EX_INTLIT);
+    expr_set_int((*ctx).exprs, node, 0);
+    return node;
+}
+
+fn s_eval_when(ctx: *SemContext, cond: i64, then_block: i64, else_block: i64) -> i64 {
+    // Try to evaluate the condition as a boolean
+    let cond_val = s_try_fold_expr(ctx, cond);
+    if cond_val >= 0 {
+        let cond_tag = expr_get_tag((*ctx).exprs, cond_val);
+        if cond_tag == EX_BOOLLIT {
+            let cond_int = expr_get_int((*ctx).exprs, cond_val);
+            if cond_int != 0 {
+                // then branch
+                return s_eval_comptime(ctx, then_block);
+            } else {
+                // else branch
+                if else_block >= 0 {
+                    return s_eval_comptime(ctx, else_block);
+                }
+            }
+        }
+    }
+    // Can't evaluate at compile time — keep both branches
+    return -1;
+}
+
+// === Constant folding ===
+
+fn s_try_fold_expr(ctx: *SemContext, eoff: i64) -> i64 {
+    let tag = expr_get_tag((*ctx).exprs, eoff);
+    if tag == EX_INTLIT { return eoff; }
+    if tag == EX_BOOLLIT { return eoff; }
+    if tag == EX_CHARLIT { return eoff; }
+    if tag == EX_FLOATLIT { return eoff; }
+    if tag == EX_NULLLIT { return eoff; }
+    if tag == EX_STRLIT { return eoff; }
+
+    if tag == EX_UNARY {
+        let op = expr_get_op((*ctx).exprs, eoff);
+        let inner = expr_get_left((*ctx).exprs, eoff);
+        let folded = s_try_fold_expr(ctx, inner);
+        if folded >= 0 {
+            let ftag = expr_get_tag((*ctx).exprs, folded);
+            if op == UOP_NEG && ftag == EX_INTLIT {
+                let val = expr_get_int((*ctx).exprs, folded);
+                let node = expr_store((*ctx).exprs, EX_INTLIT);
+                expr_set_int((*ctx).exprs, node, -val);
+                return node;
+            }
+            if op == UOP_NOT && ftag == EX_BOOLLIT {
+                let val = expr_get_int((*ctx).exprs, folded);
+                let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                expr_set_int((*ctx).exprs, node, if val != 0 { 0 } else { 1 });
+                return node;
+            }
+        }
+        return -1;
+    }
+
+    if tag == EX_BINARY {
+        let left = expr_get_left((*ctx).exprs, eoff);
+        let right = expr_get_right((*ctx).exprs, eoff);
+        let op = expr_get_op((*ctx).exprs, eoff);
+        let lf = s_try_fold_expr(ctx, left);
+        let rf = s_try_fold_expr(ctx, right);
+        if lf >= 0 && rf >= 0 {
+            let ltag = expr_get_tag((*ctx).exprs, lf);
+            let rtag = expr_get_tag((*ctx).exprs, rf);
+            if ltag == EX_INTLIT && rtag == EX_INTLIT {
+                let lv = expr_get_int((*ctx).exprs, lf);
+                let rv = expr_get_int((*ctx).exprs, rf);
+                let mut result: i64 = 0;
+                if op == BOP_ADD { result = lv + rv; }
+                else if op == BOP_SUB { result = lv - rv; }
+                else if op == BOP_MUL { result = lv * rv; }
+                else if op == BOP_DIV { if rv != 0 { result = lv / rv; } }
+                else if op == BOP_MOD { if rv != 0 { result = lv % rv; } }
+                else if op == BOP_EQ {
+                    let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                    expr_set_int((*ctx).exprs, node, if lv == rv { 1 } else { 0 });
+                    return node;
+                }
+                else if op == BOP_NE {
+                    let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                    expr_set_int((*ctx).exprs, node, if lv != rv { 1 } else { 0 });
+                    return node;
+                }
+                else if op == BOP_LT {
+                    let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                    expr_set_int((*ctx).exprs, node, if lv < rv { 1 } else { 0 });
+                    return node;
+                }
+                else if op == BOP_GT {
+                    let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                    expr_set_int((*ctx).exprs, node, if lv > rv { 1 } else { 0 });
+                    return node;
+                }
+                else if op == BOP_LE {
+                    let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                    expr_set_int((*ctx).exprs, node, if lv <= rv { 1 } else { 0 });
+                    return node;
+                }
+                else if op == BOP_GE {
+                    let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                    expr_set_int((*ctx).exprs, node, if lv >= rv { 1 } else { 0 });
+                    return node;
+                }
+                else if op == BOP_BITAND { result = lv & rv; }
+                else if op == BOP_BITOR { result = lv | rv; }
+                else if op == BOP_BITXOR { result = lv ^ rv; }
+                else if op == BOP_SHL { result = lv << rv; }
+                else if op == BOP_SHR { result = lv >> rv; }
+                else { return -1; }
+                let node = expr_store((*ctx).exprs, EX_INTLIT);
+                expr_set_int((*ctx).exprs, node, result);
+                return node;
+            }
+            if op == BOP_AND && ltag == EX_BOOLLIT && rtag == EX_BOOLLIT {
+                let lv = expr_get_int((*ctx).exprs, lf);
+                let rv = expr_get_int((*ctx).exprs, rf);
+                let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                expr_set_int((*ctx).exprs, node, if lv != 0 && rv != 0 { 1 } else { 0 });
+                return node;
+            }
+            if op == BOP_OR && ltag == EX_BOOLLIT && rtag == EX_BOOLLIT {
+                let lv = expr_get_int((*ctx).exprs, lf);
+                let rv = expr_get_int((*ctx).exprs, rf);
+                let node = expr_store((*ctx).exprs, EX_BOOLLIT);
+                expr_set_int((*ctx).exprs, node, if lv != 0 || rv != 0 { 1 } else { 0 });
+                return node;
+            }
+        }
+        return -1;
+    }
+
+    if tag == EX_IDENT {
+        // Look up constants by name
+        let name_off = expr_get_name((*ctx).exprs, eoff);
+        let decl_count = (*ctx).decls.len / DECL_BYTES;
+        let mut di: i64 = 0;
+        while di < decl_count {
+            let doff = di * DECL_BYTES;
+            let dtag = decl_get_tag((*ctx).decls, doff);
+            if dtag == DC_CONST {
+                let dname_off = decl_get_name((*ctx).decls, doff);
+                let dname = str_read((*ctx).strs, dname_off);
+                let target = str_read((*ctx).strs, name_off);
+                if s_str_eq(dname, target) {
+                    let init_off = decl_get_data((*ctx).decls, doff);
+                    if init_off >= 0 {
+                        return s_try_fold_expr(ctx, init_off);
+                    }
+                }
+            }
+            di = di + 1;
+        }
+        return -1;
+    }
+
+    return -1;
+}
+
+// ====================================================================
+// Monomorphization
+// ====================================================================
+
+fn s_build_type_map(ctx: *SemContext, template_doff: i64, call_eoff: i64, type_map: *Arena) -> void {
+    let genparam_count = decl_genparam_count(decl_get_type((*ctx).decls, template_doff));
+    if genparam_count == 0 { return; }
+    let genparams_start = decl_get_data2((*ctx).decls, template_doff) - genparam_count * 2;
+    let child_off = expr_get_child((*ctx).exprs, call_eoff);
+    let arg_count = expr_get_ccount((*ctx).exprs, call_eoff);
+
+    let mut gi: i32 = 0;
+    while gi < genparam_count && gi < arg_count {
+        let gname_off = children_read((*ctx).children, (genparams_start + gi * 2) * 8);
+        // Get concrete type from call argument expression
+        let arg_expr = children_read((*ctx).children, (child_off + gi) * 8);
+        let arg_tag = expr_get_tag((*ctx).exprs, arg_expr);
+        // Infer concrete type from the argument expression
+        let mut concrete_type: i64 = -1;
+        if arg_tag == EX_INTLIT {
+            let val = expr_get_int((*ctx).exprs, arg_expr);
+            if val >= -2147483648 && val <= 2147483647 {
+                concrete_type = type_store((*ctx).types, TY_I32, 0, 0);
+            } else {
+                concrete_type = type_store((*ctx).types, TY_I64, 0, 0);
+            }
+        } else if arg_tag == EX_BOOLLIT {
+            concrete_type = type_store((*ctx).types, TY_BOOL, 0, 0);
+        } else if arg_tag == EX_CHARLIT {
+            concrete_type = type_store((*ctx).types, TY_I32, 0, 0);
+        } else if arg_tag == EX_FLOATLIT {
+            concrete_type = type_store((*ctx).types, TY_F64, 0, 0);
+        } else if arg_tag == EX_STRLIT {
+            let u8_t = type_store((*ctx).types, TY_U8, 0, 0);
+            concrete_type = type_store((*ctx).types, TY_SLICE, u8_t, 0);
+        } else if arg_tag == EX_NULLLIT {
+            concrete_type = type_store((*ctx).types, TY_NULLABLEPTR, type_store((*ctx).types, TY_VOID, 0, 0), 0);
+        } else if arg_tag == EX_IDENT {
+            let aname_off = expr_get_name((*ctx).exprs, arg_expr);
+            // Look up variable's declared type from symbol table
+            let soff = s_find_sym(ctx, aname_off);
+            if soff >= 0 {
+                let sk = sym_kind(&(*ctx).syms, soff);
+                if sk == SYMK_VARIABLE {
+                    concrete_type = sym_type_id(&(*ctx).syms, soff);
+                }
+            }
+        }
+        if concrete_type >= 0 {
+            arena_append_i64(type_map, gname_off);
+            arena_append_i64(type_map, concrete_type);
+        }
+        gi = gi + 1;
+    }
+}
+
+fn s_substitute_type(ctx: *SemContext, type_id: i64, type_map: *Arena) -> i64 {
+    if type_id < 0 { return type_id; }
+    let tag = type_tag((*ctx).types, type_id);
+    let d1 = type_data1((*ctx).types, type_id);
+    let d2 = type_data2((*ctx).types, type_id);
+
+    if tag == TY_NAMED {
+        let type_name = str_read((*ctx).strs, d1);
+        let mut mi: i64 = 0;
+        while mi < (*type_map).len {
+            let map_name = arena_read_i64(type_map, mi);
+            let map_type = arena_read_i64(type_map, mi + 8);
+            let map_name_str = str_read((*ctx).strs, map_name);
+            if s_str_eq(type_name, map_name_str) { return map_type; }
+            mi = mi + 16;
+        }
+        return type_id;
+    }
+
+    if tag == TY_PTR { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_PTR, inner, 0); } return type_id; }
+    if tag == TY_CONSTPTR { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_CONSTPTR, inner, 0); } return type_id; }
+    if tag == TY_NULLABLEPTR { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_NULLABLEPTR, inner, 0); } return type_id; }
+    if tag == TY_MANYPTR { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_MANYPTR, inner, 0); } return type_id; }
+    if tag == TY_SLICE { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_SLICE, inner, 0); } return type_id; }
+    if tag == TY_ARRAY { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_ARRAY, inner, d2); } return type_id; }
+    if tag == TY_OPTIONAL { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_OPTIONAL, inner, 0); } return type_id; }
+    if tag == TY_ERRORUNION { let inner = s_substitute_type(ctx, d1, type_map); if inner != d1 { return type_store((*ctx).types, TY_ERRORUNION, inner, 0); } return type_id; }
+
+    return type_id;
+}
+
+fn s_substitute_expr_types(ctx: *SemContext, eoff: i64, type_map: *Arena) -> void {
+    if eoff < 0 { return; }
+    let tag = expr_get_tag((*ctx).exprs, eoff);
+
+    if tag == EX_BLOCK {
+        let stmts_off = expr_get_child((*ctx).exprs, eoff);
+        let stmt_count = expr_get_ccount((*ctx).exprs, eoff);
+        let mut si: i64 = 0;
+        while si < stmt_count {
+            let soff = eoff + stmts_off + si * STMT_BYTES;
+            s_substitute_stmt_types(ctx, soff, type_map);
+            si = si + 1;
+        }
+    } else if tag == EX_IF {
+        s_substitute_expr_types(ctx, expr_get_left((*ctx).exprs, eoff), type_map);
+        s_substitute_expr_types(ctx, expr_get_right((*ctx).exprs, eoff), type_map);
+        let else_off = expr_get_extra((*ctx).exprs, eoff);
+        if else_off >= 0 { s_substitute_expr_types(ctx, else_off, type_map); }
+    } else if tag == EX_FOR {
+        let body = expr_get_right((*ctx).exprs, eoff);
+        s_substitute_expr_types(ctx, body, type_map);
+    } else if tag == EX_WHILE {
+        let body = expr_get_right((*ctx).exprs, eoff);
+        s_substitute_expr_types(ctx, body, type_map);
+    } else if tag == EX_MATCH {
+        let arms_start = expr_get_child((*ctx).exprs, eoff);
+        let arms_end = expr_get_ccount((*ctx).exprs, eoff);
+        let mut ai: i64 = arms_start;
+        while ai < arms_end {
+            let arm_body = children_read((*ctx).children, (ai + 2) * 8);
+            s_substitute_expr_types(ctx, arm_body, type_map);
+            ai = ai + 3;
+        }
+        let wc = expr_get_extra((*ctx).exprs, eoff);
+        if wc >= 0 { s_substitute_expr_types(ctx, wc, type_map); }
+    } else if tag == EX_UNARY || tag == EX_DEREF || tag == EX_TRY {
+        s_substitute_expr_types(ctx, expr_get_left((*ctx).exprs, eoff), type_map);
+    } else if tag == EX_BINARY || tag == EX_ASSIGN || tag == EX_CATCH || tag == EX_ORELSE {
+        s_substitute_expr_types(ctx, expr_get_left((*ctx).exprs, eoff), type_map);
+        s_substitute_expr_types(ctx, expr_get_right((*ctx).exprs, eoff), type_map);
+    } else if tag == EX_CALL {
+        // Don't substitute callee, substitute args
+        let child_off = expr_get_child((*ctx).exprs, eoff);
+        let arg_count = expr_get_ccount((*ctx).exprs, eoff);
+        let mut ai: i64 = 0;
+        while ai < arg_count {
+            let arg_expr = children_read((*ctx).children, (child_off + ai) * 8);
+            s_substitute_expr_types(ctx, arg_expr, type_map);
+            ai = ai + 1;
+        }
+    } else if tag == EX_INDEX {
+        s_substitute_expr_types(ctx, expr_get_left((*ctx).exprs, eoff), type_map);
+        s_substitute_expr_types(ctx, expr_get_right((*ctx).exprs, eoff), type_map);
+    } else if tag == EX_FIELD {
+        s_substitute_expr_types(ctx, expr_get_left((*ctx).exprs, eoff), type_map);
+    } else if tag == EX_SLICE {
+        s_substitute_expr_types(ctx, expr_get_left((*ctx).exprs, eoff), type_map);
+        let end = expr_get_right((*ctx).exprs, eoff);
+        let start = expr_get_extra((*ctx).exprs, eoff);
+        if end >= 0 { s_substitute_expr_types(ctx, end, type_map); }
+        if start >= 0 { s_substitute_expr_types(ctx, start, type_map); }
+    } else if tag == EX_STRUCTINIT {
+        let fields_start = expr_get_child((*ctx).exprs, eoff);
+        let fields_end = expr_get_ccount((*ctx).exprs, eoff);
+        let mut fi: i64 = fields_start;
+        while fi < fields_end {
+            fi = fi + 1; // skip name
+            let fval = children_read((*ctx).children, fi * 8);
+            s_substitute_expr_types(ctx, fval, type_map);
+            fi = fi + 1;
+        }
+    } else if tag == EX_ARRAYLIT {
+        let child = expr_get_child((*ctx).exprs, eoff);
+        let ccount = expr_get_ccount((*ctx).exprs, eoff);
+        let mut ai: i64 = child;
+        while ai < ccount {
+            let item = children_read((*ctx).children, ai * 8);
+            s_substitute_expr_types(ctx, item, type_map);
+            ai = ai + 1;
+        }
+    }
+}
+
+fn s_substitute_stmt_types(ctx: *SemContext, soff: i64, type_map: *Arena) -> void {
+    let st_tag = stmt_tag((*ctx).exprs, soff);
+    let st_expr = stmt_expr((*ctx).exprs, soff);
+    if st_tag == ST_DECL {
+        let doff = st_expr;
+        let dtag = decl_get_tag((*ctx).decls, doff);
+        if dtag == DC_LET || dtag == DC_CONST {
+            let type_off = decl_get_extra((*ctx).decls, doff);
+            if type_off >= 0 {
+                let new_type = s_substitute_type(ctx, type_off, type_map);
+                if new_type != type_off {
+                    decl_set_extra((*ctx).decls, doff, new_type);
+                }
+            }
+            let init_off = decl_get_data((*ctx).decls, doff);
+            if init_off >= 0 {
+                s_substitute_expr_types(ctx, init_off, type_map);
+            }
+        }
+    } else if st_tag == ST_EXPR {
+        s_substitute_expr_types(ctx, st_expr, type_map);
+    } else if st_tag == ST_RETURN {
+        if st_expr >= 0 {
+            s_substitute_expr_types(ctx, st_expr, type_map);
+        }
+    }
+}
+
+fn s_try_monomorphize_fn(ctx: *SemContext, fname_off: i64, call_eoff: i64) -> i64 {
+    // Find matching generic function template
+    let fname = str_read((*ctx).strs, fname_off);
+    let gen_count = (*ctx).generic_fn_decls.len / 8;
+    let mut gi: i64 = 0;
+    let mut template_doff: i64 = -1;
+    while gi < gen_count {
+        let tdoff = arena_read_i64(&(*ctx).generic_fn_decls, gi * 8);
+        let tname_off = decl_get_name((*ctx).decls, tdoff);
+        let tname = str_read((*ctx).strs, tname_off);
+        if s_str_eq(tname, fname) {
+            template_doff = tdoff;
+            break;
+        }
+        gi = gi + 1;
+    }
+    if template_doff < 0 { return -1; }
+
+    // Build type_map: generic param name → concrete type
+    let mut type_map: Arena = arena_new(256);
+    s_build_type_map(ctx, template_doff, call_eoff, &type_map);
+    if type_map.len == 0 { return -1; }
+
+    // Create mangled name: {name}__mono{counter}
+    let mn = (*ctx).mono_counter;
+    (*ctx).mono_counter = (*ctx).mono_counter + 1;
+
+    // Build mangled name string
+    let mut name_buf = alloc(256);
+    let mut wi: i64 = 0;
+    let mut ri: i64 = 0;
+    while ri < fname.len {
+        name_buf[wi] = fname.ptr[ri];
+        wi = wi + 1;
+        ri = ri + 1;
+    }
+    name_buf[wi] = 95; wi = wi + 1; // _
+    name_buf[wi] = 95; wi = wi + 1; // _
+    name_buf[wi] = 109; wi = wi + 1; // m
+    name_buf[wi] = 111; wi = wi + 1; // o
+    name_buf[wi] = 110; wi = wi + 1; // n
+    name_buf[wi] = 111; wi = wi + 1; // o
+    // Append counter
+    if mn == 0 {
+        name_buf[wi] = 48; wi = wi + 1; // 0
+    } else {
+        let mut digits: Arena = arena_new(32);
+        let mut tmp = mn;
+        while tmp > 0 {
+            arena_append_i64(&digits, tmp % 10);
+            tmp = tmp / 10;
+        }
+        let mut di: i64 = digits.len / 8;
+        while di > 0 {
+            di = di - 1;
+            let d = arena_read_i64(&digits, di * 8);
+            name_buf[wi] = 48 + d;
+            wi = wi + 1;
+        }
+    }
+    name_buf[wi] = 0;
+    let mangled_name = string{ ptr = name_buf, len = wi };
+    let mangled_name_off = str_arena_append((*ctx).strs, mangled_name);
+
+    // Clone the template fn with concrete types
+    let orig_param_start = decl_get_data2((*ctx).decls, template_doff);
+    let orig_param_end = decl_get_extra((*ctx).decls, template_doff);
+    let orig_ret_type = decl_get_extra2((*ctx).decls, template_doff);
+    let orig_body = decl_get_data((*ctx).decls, template_doff);
+    let genparam_count = decl_genparam_count(decl_get_type((*ctx).decls, template_doff));
+    let genparams_start = orig_param_start - genparam_count * 2;
+
+    // Create new children entries for params with substituted types
+    let new_param_start = (*ctx).children.len / 8;
+    let mut pi: i64 = orig_param_start;
+    while pi < orig_param_end {
+        let pname_off = children_read((*ctx).children, pi * 8);
+        let ptype_off = children_read((*ctx).children, (pi + 1) * 8);
+        let new_ptype = s_substitute_type(ctx, ptype_off, &type_map);
+        children_append((*ctx).children, pname_off);
+        children_append((*ctx).children, new_ptype);
+        pi = pi + 2;
+    }
+    let new_param_end = (*ctx).children.len / 8;
+
+    // Substitute return type
+    let new_ret_type: i64 = orig_ret_type;
+    if orig_ret_type >= 0 {
+        let subst_ret = s_substitute_type(ctx, orig_ret_type, &type_map);
+        new_ret_type = subst_ret;
+    }
+
+    // Create the monomorphized function decl
+    let mono_doff = decl_store((*ctx).decls, DC_FN);
+    decl_set_name((*ctx).decls, mono_doff, mangled_name_off);
+    decl_set_data((*ctx).decls, mono_doff, orig_body);
+    decl_set_data2((*ctx).decls, mono_doff, new_param_start);
+    decl_set_extra((*ctx).decls, mono_doff, new_param_end);
+    decl_set_extra2((*ctx).decls, mono_doff, new_ret_type);
+    decl_set_type((*ctx).decls, mono_doff, 0); // non-generic, non-extern
+
+    // Substitute types in the body
+    if orig_body >= 0 {
+        s_substitute_expr_types(ctx, orig_body, &type_map);
+    }
+
+    // Record for injection
+    arena_append_i64(&ctx.mono_fns, mono_doff);
+
+    return mangled_name_off;
+}
+
+fn s_inject_mono_fns(ctx: *SemContext) -> void {
+    // Monomorphized fns were already added to (*ctx).decls in s_try_monomorphize_fn.
+    // Nothing more needed — they will be picked up by the codegen passes.
+    let mono_count = (*ctx).mono_fns.len / 8;
+    if mono_count > 0 {
+        print_err("Monomorphized ");
+        print_err(cg_int_to_str_i64(mono_count));
+        print_errln(" function(s)");
+    }
 }

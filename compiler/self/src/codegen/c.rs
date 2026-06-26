@@ -662,19 +662,44 @@ impl CBackend {
                 self.output.push('}');
             }
             Expr::If(cond, then_block, else_branch) => {
-                self.output.push_str("if (");
-                self.emit_expr(cond);
-                self.output.push_str(") ");
-                self.emit_block_as_stmt(then_block);
-                if let Some(else_expr) = else_branch {
-                    self.output.push_str(" else ");
-                    match else_expr.as_ref() {
-                        Expr::If(..) => self.emit_expr(else_expr),
-                        Expr::Block(b) => self.emit_block_as_stmt(b),
-                        _ => {
-                            self.output.push_str("{ ");
-                            self.emit_expr(else_expr);
-                            self.output.push_str("; }");
+                // Check if both branches are single-expression blocks (not control-flow) — emit as ternary
+                let is_simple_ternary = then_block.stmts.len() == 1
+                    && matches!(&then_block.stmts[0], Stmt::Expr(e) if !matches!(e, Expr::If(..) | Expr::For(..) | Expr::While(..) | Expr::Match(..)))
+                    && else_branch.as_ref().is_some_and(|e| {
+                        matches!(e.as_ref(), Expr::Block(b) if b.stmts.len() == 1
+                            && matches!(&b.stmts[0], Stmt::Expr(_)))
+                    });
+                if is_simple_ternary {
+                    self.output.push('(');
+                    self.emit_expr(cond);
+                    self.output.push_str(" ? (");
+                    if let Stmt::Expr(e) = &then_block.stmts[0] {
+                        self.emit_expr(e);
+                    }
+                    self.output.push_str(") : (");
+                    if let Some(else_expr) = else_branch.as_ref() {
+                        if let Expr::Block(b) = else_expr.as_ref() {
+                            if let Stmt::Expr(e) = &b.stmts[0] {
+                                self.emit_expr(e);
+                            }
+                        }
+                    }
+                    self.output.push_str("))");
+                } else {
+                    self.output.push_str("if (");
+                    self.emit_expr(cond);
+                    self.output.push_str(") ");
+                    self.emit_block_as_stmt(then_block);
+                    if let Some(else_expr) = else_branch {
+                        self.output.push_str(" else ");
+                        match else_expr.as_ref() {
+                            Expr::If(..) => self.emit_expr(else_expr),
+                            Expr::Block(b) => self.emit_block_as_stmt(b),
+                            _ => {
+                                self.output.push_str("{ ");
+                                self.emit_expr(else_expr);
+                                self.output.push_str("; }");
+                            }
                         }
                     }
                 }

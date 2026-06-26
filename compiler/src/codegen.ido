@@ -570,6 +570,10 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
                 i = i + 1;
                 continue;
             }
+            if tag == DC_STRUCT && decl_is_generic(decl_get_type(decls, doff)) != 0 {
+                i = i + 1;
+                continue;
+            }
             if cg_name_in_set(&emitted, strs, name_off) {
                 i = i + 1;
                 continue;
@@ -592,7 +596,9 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let doff = i * DECL_BYTES;
         let tag = decl_get_tag(decls, doff);
         if tag == DC_FN {
-            let is_extern = decl_get_type(decls, doff);
+            let type_id = decl_get_type(decls, doff);
+            let is_extern = type_id & 1;
+            if decl_is_generic(type_id) != 0 { i = i + 1; continue; }
             let fn_name_off = decl_get_name(decls, doff);
             let fn_name = str_read(strs, fn_name_off);
             if is_extern != 0 && cg_str_is_posix_io_fn(fn_name) {
@@ -641,8 +647,9 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         let name = str_read(strs, name_off);
 
         if tag == DC_FN {
-            let is_extern = decl_get_type(decls, doff);
-            if is_extern == 0 {
+            let type_id = decl_get_type(decls, doff);
+            let is_extern = type_id & 1;
+            if is_extern == 0 && decl_is_generic(type_id) == 0 {
                 cg_emit_fn(cg, source, strs, types, exprs, stmts, decls, children, doff);
             }
         }
@@ -971,8 +978,9 @@ fn cg_emit_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         }
 
         if dtag == DC_FN {
-            let is_extern = decl_get_type(decls, doff);
-            if is_extern == 0 {
+            let type_id = decl_get_type(decls, doff);
+            let is_extern = type_id & 1;
+            if is_extern == 0 && decl_is_generic(type_id) == 0 {
                 cg_emit_fn(cg, source, strs, types, exprs, stmts, decls, children, doff);
             }
             return;
@@ -1514,6 +1522,23 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         cg_emit_str(cg, ".val : (");
         cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, rhs);
         cg_emit_str(cg, "); })");
+        return;
+    }
+
+    if tag == EX_COMPTIME {
+        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, expr_get_left(exprs, eoff));
+        return;
+    }
+
+    if tag == EX_WHEN {
+        // when should be resolved by semantic pass; emit conditionally
+        let cond_off = expr_get_left(exprs, eoff);
+        let then_off = expr_get_right(exprs, eoff);
+        cg_emit_str(cg, "((");
+        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, cond_off);
+        cg_emit_str(cg, ") ? (");
+        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, then_off);
+        cg_emit_str(cg, ") : 0)");
         return;
     }
 
