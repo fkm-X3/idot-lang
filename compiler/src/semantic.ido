@@ -24,6 +24,8 @@ struct SemContext {
     mono_counter: i32,
     // Monomorphized fns to add
     mono_fns: Arena,
+    // Monomorphized structs to add
+    mono_structs: Arena,
     // Error tracking
     errors: Arena,
 }
@@ -37,7 +39,7 @@ pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
         scope_start = arena_new(256), scope_end = arena_new(256),
         curr_scope = 0, generic_fn_decls = arena_new(4096),
         generic_struct_decls = arena_new(4096), mono_counter = 0,
-        mono_fns = arena_new(4096), errors = arena_new(1024),
+        mono_fns = arena_new(4096), mono_structs = arena_new(4096), errors = arena_new(1024),
     };
     { let name = "void"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
     { let name = "bool"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
@@ -479,6 +481,13 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
             s_analyze_expr(ctx, fval);
             fi = fi + 1;
         }
+        // Check if this struct init uses a generic struct template
+        let sname_off = expr_get_name((*ctx).exprs, eoff);
+        let mangled = s_try_monomorphize_struct(ctx, sname_off, eoff);
+        if mangled >= 0 {
+            // Rewrite struct init to use the monomorphized struct name
+            expr_set_name((*ctx).exprs, eoff, mangled);
+        }
         return eoff;
     }
 
@@ -787,6 +796,205 @@ fn s_build_type_map(ctx: *SemContext, template_doff: i64, call_eoff: i64, type_m
     }
 }
 
+// Infer concrete type from an expression (for struct monomorphization)
+fn s_infer_type_from_expr(ctx: *SemContext, eoff: i64) -> i64 {
+    if eoff < 0 { return -1; }
+    let tag = expr_get_tag((*ctx).exprs, eoff);
+    if tag == EX_INTLIT {
+        let val = expr_get_int((*ctx).exprs, eoff);
+        if val >= -2147483648 && val <= 2147483647 {
+            return type_store((*ctx).types, TY_I32, 0, 0);
+        }
+        return type_store((*ctx).types, TY_I64, 0, 0);
+    }
+    if tag == EX_BOOLLIT { return type_store((*ctx).types, TY_BOOL, 0, 0); }
+    if tag == EX_CHARLIT { return type_store((*ctx).types, TY_I32, 0, 0); }
+    if tag == EX_FLOATLIT { return type_store((*ctx).types, TY_F64, 0, 0); }
+    if tag == EX_STRLIT {
+        let u8_t = type_store((*ctx).types, TY_U8, 0, 0);
+        return type_store((*ctx).types, TY_SLICE, u8_t, 0);
+    }
+    if tag == EX_IDENT {
+        let aname_off = expr_get_name((*ctx).exprs, eoff);
+        let soff = s_find_sym(ctx, aname_off);
+        if soff >= 0 {
+            let sk = sym_kind(&(*ctx).syms, soff);
+            if sk == SYMK_VARIABLE { return sym_type_id(&(*ctx).syms, soff); }
+        }
+    }
+    if tag == EX_UNARY {
+        return s_infer_type_from_expr(ctx, expr_get_left((*ctx).exprs, eoff));
+    }
+    if tag == EX_BINARY {
+        return s_infer_type_from_expr(ctx, expr_get_left((*ctx).exprs, eoff));
+    }
+    return -1;
+}
+
+// Build a type_map from a generic struct init expression by matching field values
+// to template field types
+fn s_build_struct_type_map(ctx: *SemContext, template_doff: i64, init_eoff: i64, type_map: *Arena) -> void {
+    let type_id = decl_get_type((*ctx).decls, template_doff);
+    let genparam_count = decl_genparam_count(type_id);
+    if genparam_count == 0 { return; }
+
+    let fields_start = decl_get_data((*ctx).decls, template_doff);
+    let fields_end = decl_get_extra((*ctx).decls, template_doff);
+    let genparams_start = fields_start - genparam_count * 2;
+
+    let init_fields_start = expr_get_child((*ctx).exprs, init_eoff);
+    let init_fields_end = expr_get_ccount((*ctx).exprs, init_eoff);
+
+    // For each init field, match to template field and build type_map
+    let mut ifi: i64 = init_fields_start;
+    while ifi < init_fields_end {
+        let init_fname_off = children_read((*ctx).children, ifi * 8);
+        let init_fname = str_read((*ctx).strs, init_fname_off);
+        ifi = ifi + 1; // skip name
+        let init_fval = children_read((*ctx).children, ifi * 8);
+        ifi = ifi + 1; // skip value
+
+        // Find matching field in the template struct
+        let mut tfi: i64 = fields_start;
+        while tfi < fields_end {
+            let tfname_off = children_read((*ctx).children, tfi * 8);
+            let tfname = str_read((*ctx).strs, tfname_off);
+            if s_str_eq(tfname, init_fname) {
+                // Check if the template field's type references a generic param
+                let tftype_off = children_read((*ctx).children, (tfi + 1) * 8);
+                let tftag = type_tag((*ctx).types, tftype_off);
+                if tftag == TY_NAMED {
+                    let d1 = type_data1((*ctx).types, tftype_off);
+                    let type_name = str_read((*ctx).strs, d1);
+                    // Check if this TY_NAMED name is a generic param
+                    let mut gi: i32 = 0;
+                    while gi < genparam_count {
+                        let gname_off = children_read((*ctx).children, (genparams_start + gi * 2) * 8);
+                        let gname = str_read((*ctx).strs, gname_off);
+                        if s_str_eq(type_name, gname) {
+                            // This field references generic param gi
+                            let concrete_type = s_infer_type_from_expr(ctx, init_fval);
+                            if concrete_type >= 0 {
+                                // Check if this genparam already has a mapping
+                                let mut found: i32 = 0;
+                                let mut mi: i64 = 0;
+                                while mi < (*type_map).len {
+                                    let map_name = arena_read_i64(type_map, mi);
+                                    let map_name_str = str_read((*ctx).strs, map_name);
+                                    if s_str_eq(map_name_str, gname) { found = 1; break; }
+                                    mi = mi + 16;
+                                }
+                                if found == 0 {
+                                    arena_append_i64(type_map, gname_off);
+                                    arena_append_i64(type_map, concrete_type);
+                                }
+                            }
+                        }
+                        gi = gi + 1;
+                    }
+                }
+                break;
+            }
+            tfi = tfi + 3;
+        }
+    }
+}
+
+fn s_try_monomorphize_struct(ctx: *SemContext, name_off: i64, init_eoff: i64) -> i64 {
+    // Find matching generic struct template
+    let sname = str_read((*ctx).strs, name_off);
+    let gen_count = (*ctx).generic_struct_decls.len / 8;
+    let mut gi: i64 = 0;
+    let mut template_doff: i64 = -1;
+    while gi < gen_count {
+        let tdoff = arena_read_i64(&(*ctx).generic_struct_decls, gi * 8);
+        let tname_off = decl_get_name((*ctx).decls, tdoff);
+        let tname = str_read((*ctx).strs, tname_off);
+        if s_str_eq(tname, sname) {
+            template_doff = tdoff;
+            break;
+        }
+        gi = gi + 1;
+    }
+    if template_doff < 0 { return -1; }
+
+    // Build type_map from init field values
+    let mut type_map: Arena = arena_new(256);
+    s_build_struct_type_map(ctx, template_doff, init_eoff, &type_map);
+    if type_map.len == 0 { return -1; }
+
+    // Create mangled name: {name}__mono{counter}
+    let mn = (*ctx).mono_counter;
+    (*ctx).mono_counter = (*ctx).mono_counter + 1;
+
+    let mut name_buf = alloc(256);
+    let mut wi: i64 = 0;
+    let mut ri: i64 = 0;
+    while ri < sname.len {
+        name_buf[wi] = sname.ptr[ri];
+        wi = wi + 1;
+        ri = ri + 1;
+    }
+    name_buf[wi] = 95; wi = wi + 1; // _
+    name_buf[wi] = 95; wi = wi + 1; // _
+    name_buf[wi] = 109; wi = wi + 1; // m
+    name_buf[wi] = 111; wi = wi + 1; // o
+    name_buf[wi] = 110; wi = wi + 1; // n
+    name_buf[wi] = 111; wi = wi + 1; // o
+    if mn == 0 {
+        name_buf[wi] = 48; wi = wi + 1; // 0
+    } else {
+        let mut digits: Arena = arena_new(32);
+        let mut tmp = mn;
+        while tmp > 0 {
+            arena_append_i64(&digits, tmp % 10);
+            tmp = tmp / 10;
+        }
+        let mut di: i64 = digits.len / 8;
+        while di > 0 {
+            di = di - 1;
+            let d = arena_read_i64(&digits, di * 8);
+            name_buf[wi] = 48 + d;
+            wi = wi + 1;
+        }
+    }
+    name_buf[wi] = 0;
+    let mangled_name = string{ ptr = name_buf, len = wi };
+    let mangled_name_off = str_arena_append((*ctx).strs, mangled_name);
+
+    // Clone the template struct with substituted field types
+    let fields_start = decl_get_data((*ctx).decls, template_doff);
+    let fields_end = decl_get_extra((*ctx).decls, template_doff);
+
+    let new_fields_start = (*ctx).children.len / 8;
+    let mut fi: i64 = fields_start;
+    while fi < fields_end {
+        let fname_off = children_read((*ctx).children, fi * 8);
+        let ftype_off = children_read((*ctx).children, (fi + 1) * 8);
+        let is_using = children_read((*ctx).children, (fi + 2) * 8);
+        let new_ftype = s_substitute_type(ctx, ftype_off, &type_map);
+        children_append((*ctx).children, fname_off);
+        children_append((*ctx).children, new_ftype);
+        children_append((*ctx).children, is_using);
+        fi = fi + 3;
+    }
+    let new_fields_end = (*ctx).children.len / 8;
+
+    // Create the monomorphized struct decl
+    let mono_doff = decl_store((*ctx).decls, DC_STRUCT);
+    decl_set_name((*ctx).decls, mono_doff, mangled_name_off);
+    decl_set_data((*ctx).decls, mono_doff, new_fields_start);
+    decl_set_extra((*ctx).decls, mono_doff, new_fields_end);
+    decl_set_type((*ctx).decls, mono_doff, 0); // non-generic
+
+    // Register as a type symbol so codegen picks it up
+    sym_store(&(*ctx).syms, mangled_name_off, SYMK_TYPE, 0);
+
+    // Record for tracking
+    arena_append_i64(&ctx.mono_structs, mono_doff);
+
+    return mangled_name_off;
+}
 fn s_substitute_type(ctx: *SemContext, type_id: i64, type_map: *Arena) -> i64 {
     if type_id < 0 { return type_id; }
     let tag = type_tag((*ctx).types, type_id);
