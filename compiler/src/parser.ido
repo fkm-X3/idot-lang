@@ -104,7 +104,19 @@ fn p_parse_let_decl(p: *Parser) -> void {
     p_ad(p); // let
     let mutbl = 0;
     if p_pk(p) == TK_MUT { p_ad(p); mutbl = 1; }
+    let mut names_start: i64 = -1;
+    let mut extra_name_count: i32 = 0;
     let name = p_ex_id(p);
+    // multi-return destructuring: let a, b = fn()
+    if p_pk(p) == TK_COMMA {
+        names_start = (*p).children.len / 8;
+        while p_pk(p) == TK_COMMA {
+            p_ad(p);
+            let extra_name = p_ex_id(p);
+            children_append((*p).children, extra_name);
+            extra_name_count = extra_name_count + 1;
+        }
+    }
     let type_off: i64 = -1;
     if p_pk(p) == TK_COLON { p_ad(p); type_off = p_parse_type(p); }
     let init_off: i64 = -1;
@@ -114,7 +126,8 @@ fn p_parse_let_decl(p: *Parser) -> void {
     decl_set_name((*p).decls, off, name);
     decl_set_data((*p).decls, off, init_off);
     decl_set_extra((*p).decls, off, type_off);
-    decl_set_extra2((*p).decls, off, mutbl);
+    decl_set_extra2((*p).decls, off, mutbl | (extra_name_count << 8));
+    decl_set_data2((*p).decls, off, names_start);
 }
 
 // === Const ===
@@ -916,7 +929,17 @@ fn p_parse_match_expr(p: *Parser) -> i64 {
         let pat_start = (*p).children.len / 8;
         while true {
             let pat_expr = p_parse_expr(p);
-            children_append((*p).children, pat_expr);
+            if p_pk(p) == TK_DOTDOT || p_pk(p) == TK_DOTDOTEQ {
+                // Range pattern: start .. end or start ..= end
+                p_ad(p);
+                let end_expr = p_parse_expr(p);
+                children_append((*p).children, 1);    // kind = RANGE
+                children_append((*p).children, pat_expr); // start
+                children_append((*p).children, end_expr); // end
+            } else {
+                children_append((*p).children, 0);    // kind = EXPR
+                children_append((*p).children, pat_expr);
+            }
             if p_pk(p) == TK_COMMA { p_ad(p); if p_pk(p) == TK_FATARROW { break; } }
             else { break; }
         }

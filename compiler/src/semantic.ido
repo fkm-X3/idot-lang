@@ -253,12 +253,32 @@ fn s_analyze_stmt(ctx: *SemContext, soff: i64) -> void {
     } else if st_tag == ST_DECL {
         let doff = st_expr_off;
         let dtag = decl_get_tag((*ctx).decls, doff);
-        if dtag == DC_LET || dtag == DC_CONST {
+        if dtag == DC_LET {
             let init_off = decl_get_data((*ctx).decls, doff);
             if init_off >= 0 {
                 s_analyze_expr(ctx, init_off);
             }
-            // Register local variable in symbol table
+            // Register local variable(s) in symbol table
+            let name_off = decl_get_name((*ctx).decls, doff);
+            let type_off = decl_get_extra((*ctx).decls, doff);
+            sym_store(&ctx.syms, name_off, SYMK_VARIABLE, type_off);
+            // Multi-return: register extra names from children arena
+            let names_start = decl_get_data2((*ctx).decls, doff);
+            if names_start >= 0 {
+                let extra2 = decl_get_extra2((*ctx).decls, doff);
+                let extra_count = (extra2 >> 8) & 0xFF;
+                let mut ei: i32 = 0;
+                while ei < extra_count {
+                    let ename_off = children_read((*ctx).children, (names_start + ei) * 8);
+                    sym_store(&ctx.syms, ename_off, SYMK_VARIABLE, type_off);
+                    ei = ei + 1;
+                }
+            }
+        } else if dtag == DC_CONST {
+            let init_off = decl_get_data((*ctx).decls, doff);
+            if init_off >= 0 {
+                s_analyze_expr(ctx, init_off);
+            }
             let name_off = decl_get_name((*ctx).decls, doff);
             let type_off = decl_get_extra((*ctx).decls, doff);
             sym_store(&ctx.syms, name_off, SYMK_VARIABLE, type_off);
@@ -331,9 +351,20 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
             let arm_body = children_read((*ctx).children, (ai + 2) * 8);
             let mut pi: i64 = pat_start;
             while pi < pat_end {
-                let pat_expr = children_read((*ctx).children, pi * 8);
-                s_analyze_expr(ctx, pat_expr);
-                pi = pi + 1;
+                let pk = children_read((*ctx).children, pi * 8);
+                if pk == 0 {
+                    // EXPR pattern
+                    let pat_expr = children_read((*ctx).children, (pi + 1) * 8);
+                    s_analyze_expr(ctx, pat_expr);
+                    pi = pi + 2;
+                } else {
+                    // RANGE pattern
+                    let range_start = children_read((*ctx).children, (pi + 1) * 8);
+                    let range_end = children_read((*ctx).children, (pi + 2) * 8);
+                    s_analyze_expr(ctx, range_start);
+                    s_analyze_expr(ctx, range_end);
+                    pi = pi + 3;
+                }
             }
             s_analyze_expr(ctx, arm_body);
             ai = ai + 3;
@@ -1055,7 +1086,24 @@ fn s_substitute_expr_types(ctx: *SemContext, eoff: i64, type_map: *Arena) -> voi
         let arms_end = expr_get_ccount((*ctx).exprs, eoff);
         let mut ai: i64 = arms_start;
         while ai < arms_end {
+            let pat_start = children_read((*ctx).children, ai * 8);
+            let pat_end = children_read((*ctx).children, (ai + 1) * 8);
             let arm_body = children_read((*ctx).children, (ai + 2) * 8);
+            let mut pi: i64 = pat_start;
+            while pi < pat_end {
+                let pk = children_read((*ctx).children, pi * 8);
+                if pk == 0 {
+                    let pat_expr = children_read((*ctx).children, (pi + 1) * 8);
+                    s_substitute_expr_types(ctx, pat_expr, type_map);
+                    pi = pi + 2;
+                } else {
+                    let range_start = children_read((*ctx).children, (pi + 1) * 8);
+                    let range_end = children_read((*ctx).children, (pi + 2) * 8);
+                    s_substitute_expr_types(ctx, range_start, type_map);
+                    s_substitute_expr_types(ctx, range_end, type_map);
+                    pi = pi + 3;
+                }
+            }
             s_substitute_expr_types(ctx, arm_body, type_map);
             ai = ai + 3;
         }
