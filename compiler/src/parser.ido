@@ -10,13 +10,14 @@ struct Parser {
     stmts: *Arena,
     decls: *Arena,
     children: *Arena,
+    fargs: *Arena,
     pos: i64,
 }
 
 pub fn p_parser_new(s: string, toks: *Arena, strs: *Arena, ty: *Arena,
-                  ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena) -> Parser {
+                  ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena, fa: *Arena) -> Parser {
     return Parser{ source = s, tokens = toks, strs = strs, types = ty,
-                   exprs = ex, stmts = st, decls = dc, children = ch, pos = 0 };
+                   exprs = ex, stmts = st, decls = dc, children = ch, fargs = fa, pos = 0 };
 }
 
 fn p_pk(p: *Parser) -> i32 {
@@ -612,12 +613,12 @@ fn p_parse_postfix(p: *Parser) -> i64 {
                 }
             }
             p_ex(p, TK_RPAREN);
-            // Store args in children arena (keeps exprs arena as pure EXPR_BYTES array)
-            let args_base = (*p).children.len / 8;
+            // Store args in fargs arena (keeps children arena clean for struct init pairs)
+            let args_base = (*p).fargs.len / 8;
             let mut ai: i64 = 0;
             while ai < arg_count {
                 let ae = arena_read_i64((*p).types, types_saved + ai * 8);
-                children_append((*p).children, ae);
+                arena_append_i64((*p).fargs, ae);
                 ai = ai + 1;
             }
             (*p).types.len = types_saved;
@@ -774,6 +775,7 @@ fn p_parse_primary(p: *Parser) -> i64 {
             if is_struct_init {
                 p_ad(p);
                 let fields_start = (*p).children.len / 8;
+                let mut field_count: i64 = 0;
                 while true {
                     if p_pk(p) == TK_RBRACE { break; }
                     let fname = p_ex_id(p);
@@ -781,9 +783,10 @@ fn p_parse_primary(p: *Parser) -> i64 {
                     let fval = p_parse_expr(p);
                     children_append((*p).children, fname);
                     children_append((*p).children, fval);
+                    field_count = field_count + 1;
                     if p_pk(p) == TK_COMMA { p_ad(p); } else { break; }
                 }
-                let fields_end = (*p).children.len / 8;
+                let fields_end = fields_start + field_count * 2;
                 p_ex(p, TK_RBRACE);
                 let node = expr_store((*p).exprs, EX_STRUCTINIT);
                 expr_set_name((*p).exprs, node, name);

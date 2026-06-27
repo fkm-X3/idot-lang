@@ -11,6 +11,7 @@ struct SemContext {
     stmts: *Arena,
     decls: *Arena,
     children: *Arena,
+    fargs: *Arena,
     // Scopes: each scope has a start/end index into the syms arena
     scopes: Arena,
     syms: Arena,
@@ -31,10 +32,10 @@ struct SemContext {
 }
 
 pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
-               ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena) -> SemContext {
+               ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena, fa: *Arena) -> SemContext {
     let ctx = SemContext{
         source = src, tokens = toks, strs = strs, types = ty,
-        exprs = ex, stmts = st, decls = dc, children = ch,
+        exprs = ex, stmts = st, decls = dc, children = ch, fargs = fa,
         scopes = arena_new(1024), syms = arena_new(4096),
         scope_start = arena_new(256), scope_end = arena_new(256),
         curr_scope = 0, generic_fn_decls = arena_new(4096),
@@ -405,7 +406,7 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
         // Analyze arguments first
         let mut ai: i64 = 0;
         while ai < arg_count {
-            let arg_expr = children_read((*ctx).children, (child_off + ai) * 8);
+            let arg_expr = arena_read_i64((*ctx).fargs, (child_off + ai) * 8);
             s_analyze_expr(ctx, arg_expr);
             ai = ai + 1;
         }
@@ -429,7 +430,7 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
                     if fname.ptr[9] != 111 { is_log = 0; }
                     if fname.ptr[10] != 103 { is_log = 0; }
                     if is_log != 0 && arg_count > 0 {
-                        let msg_expr = children_read((*ctx).children, child_off * 8);
+                        let msg_expr = arena_read_i64((*ctx).fargs, child_off * 8);
                         if expr_get_tag((*ctx).exprs, msg_expr) == EX_STRLIT {
                             let msg_off = expr_get_name((*ctx).exprs, msg_expr);
                             let msg = str_read((*ctx).strs, msg_off);
@@ -453,7 +454,7 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
                     if fname.ptr[11] != 111 { is_err = 0; }
                     if fname.ptr[12] != 114 { is_err = 0; }
                     if is_err != 0 && arg_count > 0 {
-                        let msg_expr = children_read((*ctx).children, child_off * 8);
+                        let msg_expr = arena_read_i64((*ctx).fargs, child_off * 8);
                         if expr_get_tag((*ctx).exprs, msg_expr) == EX_STRLIT {
                             let msg_off = expr_get_name((*ctx).exprs, msg_expr);
                             let msg = str_read((*ctx).strs, msg_off);
@@ -786,7 +787,7 @@ fn s_build_type_map(ctx: *SemContext, template_doff: i64, call_eoff: i64, type_m
     while gi < genparam_count && gi < arg_count {
         let gname_off = children_read((*ctx).children, (genparams_start + gi * 2) * 8);
         // Get concrete type from call argument expression
-        let arg_expr = children_read((*ctx).children, (child_off + gi) * 8);
+        let arg_expr = arena_read_i64((*ctx).fargs, (child_off + gi) * 8);
         let arg_tag = expr_get_tag((*ctx).exprs, arg_expr);
         // Infer concrete type from the argument expression
         let mut concrete_type: i64 = -1;
@@ -1120,7 +1121,7 @@ fn s_substitute_expr_types(ctx: *SemContext, eoff: i64, type_map: *Arena) -> voi
         let arg_count = expr_get_ccount((*ctx).exprs, eoff);
         let mut ai: i64 = 0;
         while ai < arg_count {
-            let arg_expr = children_read((*ctx).children, (child_off + ai) * 8);
+            let arg_expr = arena_read_i64((*ctx).fargs, (child_off + ai) * 8);
             s_substitute_expr_types(ctx, arg_expr, type_map);
             ai = ai + 1;
         }

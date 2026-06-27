@@ -51,6 +51,7 @@ fn build_output_path(sb: *DynamicArray, stem: string, ext: string) -> void {
     sb_append(sb, "build/");
     sb_append(sb, stem);
     sb_append(sb, ext);
+    sb_append_byte(sb, 0);
 }
 
 fn build_import_path(base: string, import_name: string) -> string {
@@ -120,7 +121,7 @@ fn visited_add(visited: *Arena, strs: *Arena, path: string) -> void {
 fn compile_with_imports(source: string, input_path: string, base_dir: string,
                         lib_dir: string, strs: *Arena, types: *Arena,
                         exprs: *Arena, stmts: *Arena, decls: *Arena,
-                        children: *Arena) -> i32 {
+                        children: *Arena, fargs: *Arena) -> i32 {
     let toks: Arena = arena_new(65536);
     let mut visited: Arena = arena_new(4096);
     let mut pending: Arena = arena_new(4096);
@@ -154,7 +155,7 @@ fn compile_with_imports(source: string, input_path: string, base_dir: string,
         let tok_count = file_toks.len / TOKEN_BYTES;
         print_err(cg_int_to_str_i64(tok_count));
         print_errln("");
-        let p = p_parser_new(p_src, &file_toks, strs, types, exprs, stmts, decls, children);
+        let p = p_parser_new(p_src, &file_toks, strs, types, exprs, stmts, decls, children, fargs);
         p_parse_program(&p);
 
         let decls_after = (*decls).len;
@@ -275,9 +276,10 @@ pub fn main() -> i32 {
     let stmts: Arena = arena_new(262144);
     let decls: Arena = arena_new(1048576);
     let children: Arena = arena_new(524288);
+    let fargs: Arena = arena_new(65536);
 
     let result = compile_with_imports(source, input_str, base_dir, lib_dir,
-        &strs, &types, &exprs, &stmts, &decls, &children);
+        &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
 
     if result != 0 {
         print_errln("compilation failed");
@@ -290,12 +292,12 @@ pub fn main() -> i32 {
     print_errln(" declarations");
 
     let dummy_toks: Arena = arena_new(64);
-    let ctx = s_sem_new(source, &dummy_toks, &strs, &types, &exprs, &stmts, &decls, &children);
+    let ctx = s_sem_new(source, &dummy_toks, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
     s_sem_analyze(&ctx);
     print_errln("semantic analysis done");
 
     let cg: CBackend = cg_new();
-    let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children);
+    let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
     print_err("C output: ");
     let out_len_s = cg_int_to_str_i64(output.len);
     print_err(out_len_s);
