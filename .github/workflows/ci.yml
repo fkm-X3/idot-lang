@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+        with:
+          rust-version: stable
+
+      - name: Build workspace
+        run: cargo build --workspace --verbose
+
+      - name: Compile all .ido files with Idot
+        run: |
+          set -e
+          git ls-files "*.ido" | while IFS= read -r file; do
+            echo "Compiling $file"
+            cargo run --quiet --package idot -- compile "$file"
+          done
