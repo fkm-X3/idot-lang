@@ -306,7 +306,7 @@ pub fn main() -> i32 {
     let stem = file_stem(input_str);
     let mut c_path_sb = sb_new();
     build_output_path(&c_path_sb, stem, ".c");
-    let c_path = string{ ptr = sb_get_ptr(&c_path_sb), len = sb_get_len(&c_path_sb) };
+    let c_path = string{ ptr = sb_get_ptr(&c_path_sb), len = sb_get_len(&c_path_sb) - 1 };
     write_str_to_file(c_path, output);
     print_err("wrote ");
     print_err(c_path);
@@ -320,7 +320,7 @@ pub fn main() -> i32 {
     // Build and run clang compilation command
     let mut exe_path_sb = sb_new();
     build_output_path(&exe_path_sb, stem, ".exe");
-    let exe_path = string{ ptr = sb_get_ptr(&exe_path_sb), len = sb_get_len(&exe_path_sb) };
+    let exe_path = string{ ptr = sb_get_ptr(&exe_path_sb), len = sb_get_len(&exe_path_sb) - 1 };
 
     let mut cmd_sb = sb_new();
     sb_append(&cmd_sb, "clang -o ");
