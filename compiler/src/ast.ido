@@ -464,6 +464,33 @@ pub fn str_arena_read(strs: *Arena, off: i64, len: i64) -> string {
     return string{ ptr = (*strs).data + off, len = len };
 }
 
+pub fn type_find(types: *Arena, strs: *Arena, name_off: i64) -> i64 {
+    let target = str_read(strs, name_off);
+    let count = (*types).len / TYPE_BYTES;
+    let mut i: i64 = 0;
+    while i < count {
+        let off = i * TYPE_BYTES;
+        if type_tag(types, off) == TY_NAMED {
+            let stored = str_read(strs, type_data1(types, off));
+            if stored.len == target.len {
+                let mut eq: i32 = 1;
+                let mut j: i64 = 0;
+                while j < stored.len && eq != 0 {
+                    if stored.ptr[j] != target.ptr[j] {
+                        eq = 0;
+                    }
+                    j = j + 1;
+                }
+                if eq != 0 {
+                    return off;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
 // ==================== Children Arena ====================
 // For storing lists of child offsets (e.g., function arguments).
 // Simply an array of i64 values.

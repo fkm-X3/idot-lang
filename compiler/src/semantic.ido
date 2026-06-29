@@ -261,7 +261,15 @@ fn s_analyze_stmt(ctx: *SemContext, soff: i64) -> void {
             }
             // Register local variable(s) in symbol table
             let name_off = decl_get_name((*ctx).decls, doff);
-            let type_off = decl_get_extra((*ctx).decls, doff);
+            let mut type_off = decl_get_extra((*ctx).decls, doff);
+            // Infer type from init expression if not explicitly declared
+            if type_off < 0 && init_off >= 0 {
+                let inferred = s_infer_expr_type(ctx, init_off);
+                if inferred >= 0 {
+                    type_off = inferred;
+                    decl_set_extra((*ctx).decls, doff, type_off);
+                }
+            }
             sym_store(&ctx.syms, name_off, SYMK_VARIABLE, type_off);
             // Multi-return: register extra names from children arena
             let names_start = decl_get_data2((*ctx).decls, doff);
@@ -490,6 +498,7 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
     if tag == EX_FIELD {
         let obj = expr_get_left((*ctx).exprs, eoff);
         s_analyze_expr(ctx, obj);
+        expr_set_type((*ctx).exprs, eoff, 0);
         return eoff;
     }
 
@@ -568,6 +577,20 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
 
     // Literals, identifiers: no analysis needed
     return eoff;
+}
+
+// ====================================================================
+// Type inference from expressions
+// ====================================================================
+
+fn s_infer_expr_type(ctx: *SemContext, eoff: i64) -> i64 {
+    let tag = expr_get_tag((*ctx).exprs, eoff);
+    if tag == EX_STRUCTINIT {
+        let sname_off = expr_get_name((*ctx).exprs, eoff);
+        let tid = type_find((*ctx).types, (*ctx).strs, sname_off);
+        if tid >= 0 { return tid; }
+    }
+    return -1;
 }
 
 // ====================================================================
