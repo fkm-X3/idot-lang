@@ -172,4 +172,4 @@ Enum and union codegen are in progress; the package manager supports
 
 ## License
 
-MIT
+[MIT](LICENSE)
