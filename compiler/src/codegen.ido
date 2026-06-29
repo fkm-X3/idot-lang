@@ -7,6 +7,7 @@ struct CBackend {
     for_counter: i32,
     try_counter: i32,
     defer_stack: Arena,
+    defer_marks: Arena,
     fargs: *Arena,
     curr_fn: i64,
 }
@@ -19,6 +20,7 @@ pub fn cg_new() -> CBackend {
         for_counter = 0,
         try_counter = 0,
         defer_stack = arena_new(1024),
+        defer_marks = arena_new(256),
         fargs = 0,
         curr_fn = -1,
     };
@@ -1012,6 +1014,7 @@ fn cg_emit_fn(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     if body_off >= 0 {
         cg_emit_line(cg, " {");
         (*cg).indent = (*cg).indent + 1;
+        cg_push_defer_scope(cg);
         if cg_str_is_main(name) {
             cg_emit_indent(cg);
             cg_emit_str(cg, "__ido_argc = argc;");
@@ -1022,11 +1025,20 @@ fn cg_emit_fn(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         }
         let stmts_off = expr_get_child(exprs, body_off);
         let stmt_count = expr_get_ccount(exprs, body_off);
+        let mut has_return: i32 = 0;
         let mut si: i64 = 0;
         while si < stmt_count {
             let soff = body_off + stmts_off + si * STMT_BYTES;
+            if stmt_tag(exprs, soff) == ST_RETURN { has_return = 1; }
             cg_emit_stmt(cg, source, strs, types, exprs, stmts, decls, children, soff);
             si = si + 1;
+        }
+        if has_return == 0 {
+            cg_emit_pending_defers(cg, source, strs, types, exprs, stmts, decls, children);
+            // Add implicit return; for void functions
+            if ret_type < 0 {
+                cg_emit_line(cg, "return;");
+            }
         }
         (*cg).indent = (*cg).indent - 1;
         cg_emit_line(cg, "}");
@@ -1093,6 +1105,7 @@ fn cg_emit_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     }
 
     if tag == ST_RETURN {
+        cg_emit_pending_defers(cg, source, strs, types, exprs, stmts, decls, children);
         cg_emit_indent(cg);
         cg_emit_str(cg, "return");
         if expr_off >= 0 {
@@ -1224,18 +1237,12 @@ fn cg_emit_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     }
 
     if tag == ST_DEFER {
-        // Emit deferred expression inline (simplified)
-        cg_emit_indent(cg);
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, expr_off);
-        cg_emit_line(cg, "; /* defer */");
+        arena_append_i64(&(*cg).defer_stack, expr_off);
         return;
     }
 
     if tag == ST_ERRDEFER {
-        // Emit errdeferred expression inline (simplified)
-        cg_emit_indent(cg);
-        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, expr_off);
-        cg_emit_line(cg, "; /* errdefer */");
+        arena_append_i64(&(*cg).defer_stack, expr_off);
         return;
     }
 }
@@ -1244,9 +1251,10 @@ fn cg_emit_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
 
 fn cg_emit_block_as_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
                          exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena,
-                         boff: i64) -> void {
+                          boff: i64) -> void {
     cg_emit_line(cg, " {");
     (*cg).indent = (*cg).indent + 1;
+    cg_push_defer_scope(cg);
     let stmts_off = expr_get_child(exprs, boff);
     let stmt_count = expr_get_ccount(exprs, boff);
     let stmt_idx = 0;
@@ -1354,6 +1362,7 @@ fn cg_emit_block_as_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Ar
             cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, stmt_off);
             cg_emit_line(cg, ";");
         } else if stmt_tag_val == ST_RETURN {
+            cg_emit_pending_defers(cg, source, strs, types, exprs, stmts, decls, children);
             cg_emit_indent(cg);
             cg_emit_str(cg, "return");
             if stmt_off >= 0 {
@@ -1368,20 +1377,41 @@ fn cg_emit_block_as_stmt(cg: *CBackend, source: string, strs: *Arena, types: *Ar
             cg_emit_indent(cg);
             cg_emit_line(cg, "continue;");
         } else if stmt_tag_val == ST_DEFER {
-            cg_emit_indent(cg);
-            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, stmt_off);
-            cg_emit_line(cg, "; /* defer */");
+            arena_append_i64(&(*cg).defer_stack, stmt_off);
         } else if stmt_tag_val == ST_ERRDEFER {
-            cg_emit_indent(cg);
-            cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, stmt_off);
-            cg_emit_line(cg, "; /* errdefer */");
+            arena_append_i64(&(*cg).defer_stack, stmt_off);
         }
         stmt_idx = stmt_idx + 1;
     }
+    cg_emit_pending_defers(cg, source, strs, types, exprs, stmts, decls, children);
     (*cg).indent = (*cg).indent - 1;
     cg_emit_indent(cg);
     cg_emit_str(cg, "}");
 }
+// === Defer stack ===
+
+fn cg_push_defer_scope(cg: *CBackend) -> void {
+    let mark = (*cg).defer_stack.len;
+    arena_append_i64(&(*cg).defer_marks, mark);
+}
+
+fn cg_emit_pending_defers(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
+                          exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena) -> void {
+    if (*cg).defer_marks.len < 8 { return; }
+    let mark_idx = ((*cg).defer_marks.len / 8) - 1;
+    let scope_start = arena_read_i64(&(*cg).defer_marks, mark_idx * 8);
+    let mut i: i64 = (*cg).defer_stack.len;
+    while i > scope_start {
+        i = i - 8;
+        let expr_off = arena_read_i64(&(*cg).defer_stack, i);
+        cg_emit_indent(cg);
+        cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, expr_off);
+        cg_emit_line(cg, ";");
+    }
+    (*cg).defer_stack.len = scope_start;
+    (*cg).defer_marks.len = (*cg).defer_marks.len - 8;
+}
+
 // === Expression emission ===
 
 fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
@@ -1933,7 +1963,10 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         cg_emit_expr(cg, source, strs, types, exprs, stmts, decls, children, inner);
         cg_emit_str(cg, "); if (_try");
         cg_emit_i32(cg, id);
-        cg_emit_str(cg, ".err) { return _try");
+        cg_emit_str(cg, ".err) { ");
+        cg_emit_pending_defers(cg, source, strs, types, exprs, stmts, decls, children);
+        cg_emit_indent(cg);
+        cg_emit_str(cg, "return _try");
         cg_emit_i32(cg, id);
         cg_emit_str(cg, ".err; } _try");
         cg_emit_i32(cg, id);
