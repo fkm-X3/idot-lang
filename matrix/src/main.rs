@@ -12,7 +12,7 @@ fn main() {
         eprintln!("  new <project-name>   Create a new project");
         eprintln!("  build                Build the project in current directory");
         eprintln!("  run                  Build and run the project");
-        eprintln!("  test                 Run tests");
+        eprintln!("  test [options]       Run tests (--self-hosted to use Idot compiler)");
         eprintln!("  add <name> [url]     Add a dependency");
         eprintln!("  remove <name>        Remove a dependency");
         eprintln!("  vendor               Download all dependencies locally");
@@ -37,7 +37,8 @@ fn main() {
         }
         "test" => {
             let dir = current_dir();
-            commands::cmd_test(&dir);
+            let self_hosted = args[2..].iter().any(|a| a == "--self-hosted");
+            commands::cmd_test(&dir, self_hosted);
         }
         "add" => {
             let dir = current_dir();

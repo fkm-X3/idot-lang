@@ -125,47 +125,158 @@ pub fn cmd_run(project_dir: &Path) {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-pub fn cmd_test(project_dir: &Path) {
+pub fn cmd_test(project_dir: &Path, self_hosted: bool) {
+    let mut test_files: Vec<PathBuf> = Vec::new();
+
+    // Scan src/ for *_test.ido (matrix project convention)
     let src_dir = project_dir.join("src");
-    if !src_dir.exists() {
-        eprintln!("Error: no src/ directory found");
-        std::process::exit(1);
-    }
-
-    let manifest = load_manifest(project_dir);
-    let mut import_dirs = resolve_deps(project_dir, &manifest);
-    import_dirs.push(get_stdlib_dir());
-
-    let test_files: Vec<_> = fs::read_dir(&src_dir)
-        .unwrap()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension()? == "ido" {
-                let name = path.file_stem()?.to_str()?;
-                if name.ends_with("_test") {
-                    return Some(path);
+    if src_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&src_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("ido") {
+                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    if name.ends_with("_test") {
+                        test_files.push(path);
+                    }
                 }
             }
-            None
-        })
-        .collect();
+        }
+    }
+
+    // Scan tests/ directory for .ido files (test_* or *_test naming)
+    let tests_dir = project_dir.join("tests");
+    if tests_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&tests_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("ido") {
+                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    if name.starts_with("test_") || name.ends_with("_test") {
+                        test_files.push(path);
+                    }
+                }
+            }
+        }
+    }
 
     if test_files.is_empty() {
         println!("No tests found");
         return;
     }
 
-    for test_file in &test_files {
-        println!("Testing {}...", test_file.display());
-        let source = fs::read_to_string(test_file).expect("Failed to read test file");
-        let c_source = idot::compile_with_deps(&source, Some(test_file), &import_dirs);
+    if self_hosted {
+        run_tests_self_hosted(project_dir, &test_files);
+    } else {
+        let manifest_path = project_dir.join("matrix.toml");
+        if !manifest_path.exists() {
+            eprintln!("Error: no matrix.toml found (required for non-self-hosted mode)");
+            eprintln!("Use --self-hosted to run tests without a project manifest");
+            std::process::exit(1);
+        }
+        let manifest = load_manifest(project_dir);
+        let mut import_dirs = resolve_deps(project_dir, &manifest);
+        import_dirs.push(get_stdlib_dir());
+        run_tests_bootstrap(project_dir, &test_files, &import_dirs);
+    }
+}
 
-        let c_path = project_dir.join("build").join(
-            format!("{}_test.c", test_file.file_stem().unwrap().to_str().unwrap())
-        );
+fn get_idot_compiler_path() -> PathBuf {
+    let matrix_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    matrix_dir.parent().unwrap().join("build").join("main.exe")
+}
+
+fn run_tests_self_hosted(project_dir: &Path, test_files: &[PathBuf]) {
+    let compiler_path = get_idot_compiler_path();
+    if !compiler_path.exists() {
+        eprintln!("Error: self-hosted compiler not found at {}", compiler_path.display());
+        eprintln!("Build it first with: cargo run -- compile compiler/src/main.ido");
+        std::process::exit(1);
+    }
+
+    let lib_dir = get_stdlib_dir();
+
+    fs::create_dir_all(project_dir.join("build")).ok();
+
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for test_file in test_files {
+        let stem = test_file.file_stem().unwrap().to_str().unwrap();
+        print!("{} ... ", stem);
+
+        // Step 1: compile with self-hosted compiler (emit C, skip clang)
+        let compile_status = std::process::Command::new(&compiler_path)
+            .arg("compile")
+            .arg(test_file)
+            .arg("--emit-c")
+            .arg("--lib-dir")
+            .arg(&lib_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("Failed to run self-hosted compiler");
+
+        if !compile_status.success() {
+            println!("COMPILE FAILED");
+            failed += 1;
+            continue;
+        }
+
+        // Step 2: compile the generated C file with clang/cc
+        let c_path = project_dir.join("build").join(format!("{}.c", stem));
         let exe_path = project_dir.join("build").join(
-            format!("{}_test{}", test_file.file_stem().unwrap().to_str().unwrap(),
+            format!("{}{}", stem,
+                if cfg!(target_os = "windows") { ".exe" } else { "" })
+        );
+
+        let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
+        let cc_status = std::process::Command::new(cc)
+            .arg("-o")
+            .arg(&exe_path)
+            .arg(&c_path)
+            .status()
+            .expect("Failed to compile C output");
+
+        if !cc_status.success() {
+            println!("CC FAILED");
+            failed += 1;
+            continue;
+        }
+
+        // Step 3: run the test executable
+        let run_status = std::process::Command::new(&exe_path)
+            .status()
+            .expect("Failed to run test");
+
+        let exit_code = run_status.code().unwrap_or(-1);
+        println!("exit code {}", exit_code);
+        if exit_code == 0 {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
+    }
+
+    println!("\nResults: {} passed, {} failed (non-zero exit)", passed, failed);
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+fn run_tests_bootstrap(project_dir: &Path, test_files: &[PathBuf], import_dirs: &[PathBuf]) {
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for test_file in test_files {
+        let stem = test_file.file_stem().unwrap().to_str().unwrap();
+        print!("{} ... ", stem);
+        let source = fs::read_to_string(test_file).expect("Failed to read test file");
+        let c_source = idot::compile_with_deps(&source, Some(test_file), import_dirs);
+
+        let c_path = project_dir.join("build").join(format!("{}.c", stem));
+        let exe_path = project_dir.join("build").join(
+            format!("{}{}", stem,
                 if cfg!(target_os = "windows") { ".exe" } else { "" })
         );
 
@@ -181,7 +292,8 @@ pub fn cmd_test(project_dir: &Path) {
             .expect("Failed to compile C output");
 
         if !status.success() {
-            eprintln!("  FAILED to compile test");
+            println!("CC FAILED");
+            failed += 1;
             continue;
         }
 
@@ -189,12 +301,16 @@ pub fn cmd_test(project_dir: &Path) {
             .status()
             .expect("Failed to run test");
 
-        if status.success() {
-            println!("  PASSED");
+        let exit_code = status.code().unwrap_or(-1);
+        println!("exit code {}", exit_code);
+        if exit_code == 0 {
+            passed += 1;
         } else {
-            println!("  FAILED with exit code {:?}", status.code());
+            failed += 1;
         }
     }
+
+    println!("\nResults: {} passed, {} failed (non-zero exit)", passed, failed);
 }
 
 pub fn cmd_add(project_dir: &Path, args: &[String]) {
