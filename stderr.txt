@@ -1,1 +1,0 @@
-Usage: idot compile <file.ido> [--emit-c] [--lib-dir <dir>]       idot run    <file.ido> [--lib-dir <dir>]
