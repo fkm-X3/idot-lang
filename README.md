@@ -9,12 +9,12 @@ toward self-hosting.
 
 <table>
   <tr>
-    <td width="56%" bgcolor="#8510d8">&nbsp;</td>
-    <td width="44%" bgcolor="#dea584">&nbsp;</td>
+    <td width="60%" bgcolor="#8510d8">&nbsp;</td>
+    <td width="40%" bgcolor="#dea584">&nbsp;</td>
   </tr>
   <tr>
-    <td align="center"><b>Idot</b> 56%</td>
-    <td align="center"><b>Rust</b> 44%</td>
+    <td align="center"><b>Idot</b> 60%</td>
+    <td align="center"><b>Rust</b> 40%</td>
   </tr>
 </table>
 
