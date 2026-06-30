@@ -75,7 +75,7 @@ pub fn cmd_build(project_dir: string) -> i32 {
         return 1;
     }
 
-    let c_source = compile_file(source, main_str, project_dir, lib_dir);
+    let c_source = compile_file(source, main_str, project_dir, lib_dir, 0);
     if c_source.len == 0 { return 1; }
 
     write_str_to_file(c_path_str, c_source);

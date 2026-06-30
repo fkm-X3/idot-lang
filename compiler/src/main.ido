@@ -8,6 +8,7 @@ import "cmd_run";
 import "cmd_test";
 import "cmd_add";
 import "cmd_vendor";
+import "cmd_bench";
 
 fn build_output_path(sb: *DynamicArray, stem: string, ext: string) -> void {
     sb_append(sb, "build/");
@@ -96,6 +97,26 @@ pub fn main() -> i32 {
         return cmd_vendor(".");
     }
 
+    if cmd == CMD_BENCH {
+        let mut quick: i32 = 0;
+        let mut save_path: string = string{ ptr = alloc(1), len = 0 };
+        let mut i: i64 = 2;
+        while i < argc_val {
+            let arg_ptr = __ido_get_argv(i);
+            let arg_str = string{ ptr = arg_ptr, len = strlen(arg_ptr) };
+            if is_flag(arg_str, "quick") != 0 { quick = 1; }
+            if is_flag(arg_str, "save") != 0 {
+                i = i + 1;
+                if i < argc_val {
+                    let sp_ptr = __ido_get_argv(i);
+                    save_path = string{ ptr = sp_ptr, len = strlen(sp_ptr) };
+                }
+            }
+            i = i + 1;
+        }
+        return cmd_bench(quick, save_path);
+    }
+
     // Compiler commands (compile / run for individual files)
     if argc_val < 3 {
         print_usage();
@@ -106,12 +127,14 @@ pub fn main() -> i32 {
     let input_str = string{ ptr = input_ptr, len = strlen(input_ptr) };
 
     let emit_c: i32 = 0;
+    let show_time: i32 = 0;
     let mut lib_dir: string = string{ ptr = alloc(1), len = 0 };
     let mut i: i64 = 3;
     while i < argc_val {
         let arg_ptr = __ido_get_argv(i);
         let arg_str = string{ ptr = arg_ptr, len = strlen(arg_ptr) };
         if is_flag(arg_str, "emit-c") != 0 { emit_c = 1; }
+        if is_flag(arg_str, "time") != 0 { show_time = 1; }
         if is_flag(arg_str, "lib-dir") != 0 {
             i = i + 1;
             if i < argc_val {
@@ -141,7 +164,7 @@ pub fn main() -> i32 {
         return 1;
     }
 
-    let output = compile_file(source, input_str, base_dir, lib_dir);
+    let output = compile_file(source, input_str, base_dir, lib_dir, show_time);
     if output.len == 0 {
         print_errln("compilation failed");
         return 1;

@@ -21,7 +21,7 @@ fn compile_and_run(src: string, stem: string, expected_exit: i32) -> i32 {
 
     write_str_to_file(src_path_str, src);
 
-    let c_source = compile_file(src, src_path_str, ".", "lib");
+    let c_source = compile_file(src, src_path_str, ".", "lib", 0);
     if c_source.len == 0 {
         print_err("COMPILE FAILED: ");
         print_errln(stem);
@@ -91,7 +91,7 @@ fn compile_check_c(src: string, stem: string, expected: string) -> i32 {
 
     write_str_to_file(src_path_str, src);
 
-    let c_source = compile_file(src, src_path_str, ".", "lib");
+    let c_source = compile_file(src, src_path_str, ".", "lib", 0);
     if c_source.len == 0 {
         print_err("COMPILE FAILED: ");
         print_errln(stem);

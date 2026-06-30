@@ -1,0 +1,256 @@
+import "std";
+import "util";
+import "codegen";
+
+fn r(cmd: string) -> i32 {
+    println(cmd);
+    let rc = system(cmd.ptr);
+    if rc != 0 {
+        print("  exit code ");
+        println(cg_int_to_str_i64(rc));
+    }
+    return rc;
+}
+
+fn sz(path: string) -> i64 {
+    if file_exists(path) == 0 { return 0; }
+    let f = open_file(path, 0);
+    let n = file_size(f);
+    close_file(f);
+    return n;
+}
+
+fn hash_file(path: string) -> string {
+    let mut c = sb_new();
+    sb_append(&c, "certutil -hashfile \"");
+    sb_append(&c, path);
+    sb_append(&c, "\" SHA256 > \"build\\bench\\_hash.txt\"");
+    sb_append_byte(&c, 0);
+    let cs = string{ ptr = sb_get_ptr(&c), len = sb_get_len(&c) };
+    system(cs.ptr);
+
+    let content = read_entire_file("build\\bench\\_hash.txt");
+    let mut i: i64 = 0;
+    while i < content.len && content.ptr[i] != 10 && content.ptr[i] != 13 {
+        i = i + 1;
+    }
+    while i < content.len && (content.ptr[i] == 10 || content.ptr[i] == 13) {
+        i = i + 1;
+    }
+    let start = i;
+    while i < content.len && content.ptr[i] != 10 && content.ptr[i] != 13 {
+        i = i + 1;
+    }
+    return string{ ptr = content.ptr + start, len = i - start };
+}
+
+fn print_metric(label: string, v: i64, unit: string) -> void {
+    print("  ");
+    print(label);
+    print(": ");
+    print(cg_int_to_str_i64(v));
+    print(" ");
+    println(unit);
+}
+
+fn print_hash(label: string, h: string) -> void {
+    print("  ");
+    print(label);
+    print(": ");
+    println(h);
+}
+
+fn print_bool(label: string, v: i32) -> void {
+    print("  ");
+    print(label);
+    print(": ");
+    if v != 0 { println("yes"); }
+    else { println("no"); }
+}
+
+fn sb_a(sb: *DynamicArray, s: string) -> void {
+    sb_append(sb, s);
+}
+
+pub fn cmd_bench(quick: i32, save_path: string) -> i32 {
+    let self_ptr = __ido_get_argv(0);
+    let self_str = string{ ptr = self_ptr, len = strlen(self_ptr) };
+    let src: string = "compiler\\src\\main.ido";
+
+    if file_exists(src) == 0 {
+        print_err("error: source file not found -- run from repo root\n");
+        return 1;
+    }
+
+    println("Idot Self-Hosting Benchmark");
+    println("===========================");
+    print("  Compiler: ");
+    println(self_str);
+    print("  Source:   ");
+    println(src);
+    println("");
+
+    r("if not exist \"build\\bench\" mkdir \"build\\bench\"");
+
+    // ────── Stage 1 ──────
+    println("--- Stage 1 (Bootstrap) ---");
+    let mut cmd1 = sb_new();
+    sb_append(&cmd1, self_str);
+    sb_append(&cmd1, " compile \"");
+    sb_append(&cmd1, src);
+    sb_append(&cmd1, "\" --lib-dir lib --time");
+    sb_append_byte(&cmd1, 0);
+    let rc1 = r(string{ ptr = sb_get_ptr(&cmd1), len = sb_get_len(&cmd1) });
+    if rc1 != 0 { println("  stage 1 failed"); return 1; }
+
+    r("copy /Y \"build\\main.c\" \"build\\bench\\stage1.c\" >nul 2>&1");
+    r("copy /Y \"build\\main.exe\" \"build\\bench\\stage1.exe\" >nul 2>&1");
+    r("del /Q \"build\\main.exe\" 2>nul");
+
+    let s1_c = sz("build\\bench\\stage1.c");
+    let s1_exe = sz("build\\bench\\stage1.exe");
+    let s1_hash = hash_file("build\\bench\\stage1.exe");
+    print_metric("C source size", s1_c, "bytes");
+    print_metric("Binary size", s1_exe, "bytes");
+    print_hash("SHA256", s1_hash);
+    println("");
+
+    // ────── Stage 2 ──────
+    println("--- Stage 2 (Self-hosted) ---");
+    let mut cmd2 = sb_new();
+    sb_append(&cmd2, "build\\bench\\stage1.exe compile \"");
+    sb_append(&cmd2, src);
+    sb_append(&cmd2, "\" --lib-dir lib --time");
+    sb_append_byte(&cmd2, 0);
+    let rc2 = r(string{ ptr = sb_get_ptr(&cmd2), len = sb_get_len(&cmd2) });
+    if rc2 != 0 { println("  stage 2 failed"); return 1; }
+
+    r("copy /Y \"build\\main.c\" \"build\\bench\\stage2.c\" >nul 2>&1");
+    r("copy /Y \"build\\main.exe\" \"build\\bench\\stage2.exe\" >nul 2>&1");
+    r("del /Q \"build\\main.exe\" 2>nul");
+
+    let s2_c = sz("build\\bench\\stage2.c");
+    let s2_exe = sz("build\\bench\\stage2.exe");
+    let s2_hash = hash_file("build\\bench\\stage2.exe");
+    print_metric("C source size", s2_c, "bytes");
+    print_metric("Binary size", s2_exe, "bytes");
+    print_hash("SHA256", s2_hash);
+    println("");
+
+    // ────── Stage 3 (optional) ──────
+    let s3_c: i64 = 0;
+    let s3_exe: i64 = 0;
+    let s3_hash: string = string{ ptr = alloc(1), len = 0 };
+    if quick == 0 {
+        println("--- Stage 3 (Stability) ---");
+        let mut cmd3 = sb_new();
+        sb_append(&cmd3, "build\\bench\\stage2.exe compile \"");
+        sb_append(&cmd3, src);
+        sb_append(&cmd3, "\" --lib-dir lib --time");
+        sb_append_byte(&cmd3, 0);
+        let rc3 = r(string{ ptr = sb_get_ptr(&cmd3), len = sb_get_len(&cmd3) });
+        if rc3 != 0 { println("  stage 3 failed"); return 1; }
+
+        r("copy /Y \"build\\main.c\" \"build\\bench\\stage3.c\" >nul 2>&1");
+        r("copy /Y \"build\\main.exe\" \"build\\bench\\stage3.exe\" >nul 2>&1");
+        r("del /Q \"build\\main.exe\" 2>nul");
+
+        s3_c = sz("build\\bench\\stage3.c");
+        s3_exe = sz("build\\bench\\stage3.exe");
+        s3_hash = hash_file("build\\bench\\stage3.exe");
+        print_metric("C source size", s3_c, "bytes");
+        print_metric("Binary size", s3_exe, "bytes");
+        print_hash("SHA256", s3_hash);
+        println("");
+    }
+
+    // ────── Summary ──────
+    println("=== SUMMARY ===");
+    println("");
+    println("  Stage 1 (Bootstrap):");
+    print_metric("    C source", s1_c, "bytes");
+    print_metric("    Binary", s1_exe, "bytes");
+    print_hash("    SHA256", s1_hash);
+    println("  Stage 2 (Self-hosted):");
+    print_metric("    C source", s2_c, "bytes");
+    print_metric("    Binary", s2_exe, "bytes");
+    print_hash("    SHA256", s2_hash);
+    if quick == 0 {
+        println("  Stage 3 (Stability):");
+        print_metric("    C source", s3_c, "bytes");
+        print_metric("    Binary", s3_exe, "bytes");
+        print_hash("    SHA256", s3_hash);
+    }
+    println("");
+
+    // Compare hashes
+    print_hash("  Stage 1 SHA256", s1_hash);
+    print_hash("  Stage 2 SHA256", s2_hash);
+    let s1_eq_s2: i32 = 0;
+    if s1_hash.len > 0 && s2_hash.len > 0 && s1_hash.len == s2_hash.len {
+        let mut ei: i64 = 0;
+        s1_eq_s2 = 1;
+        while ei < s1_hash.len {
+            if s1_hash.ptr[ei] != s2_hash.ptr[ei] { s1_eq_s2 = 0; break; }
+            ei = ei + 1;
+        }
+    }
+    print_bool("  Stage 1 == Stage 2 (byte-identical)", s1_eq_s2);
+
+    let s2_eq_s3: i32 = 0;
+    if quick == 0 {
+        print_hash("  Stage 3 SHA256", s3_hash);
+        if s2_hash.len > 0 && s3_hash.len > 0 && s2_hash.len == s3_hash.len {
+            let mut ei: i64 = 0;
+            s2_eq_s3 = 1;
+            while ei < s2_hash.len {
+                if s2_hash.ptr[ei] != s3_hash.ptr[ei] { s2_eq_s3 = 0; break; }
+                ei = ei + 1;
+            }
+        }
+        print_bool("  Stage 2 == Stage 3 (bootstrap verified)", s2_eq_s3);
+    }
+
+    r("del /Q \"build\\bench\\_hash.txt\" 2>nul");
+
+    if save_path.len > 0 {
+        let mut md = sb_new();
+        sb_a(&md, "# Idot Self-Hosting Benchmark Results\n");
+        sb_a(&md, "\n");
+        sb_a(&md, "## Stage 1 (Bootstrap)\n");
+        sb_a(&md, "- C source: "); sb_a(&md, cg_int_to_str_i64(s1_c)); sb_a(&md, " bytes\n");
+        sb_a(&md, "- Binary: "); sb_a(&md, cg_int_to_str_i64(s1_exe)); sb_a(&md, " bytes\n");
+        sb_a(&md, "- SHA256: "); sb_a(&md, s1_hash); sb_a(&md, "\n");
+        sb_a(&md, "\n");
+        sb_a(&md, "## Stage 2 (Self-hosted)\n");
+        sb_a(&md, "- C source: "); sb_a(&md, cg_int_to_str_i64(s2_c)); sb_a(&md, " bytes\n");
+        sb_a(&md, "- Binary: "); sb_a(&md, cg_int_to_str_i64(s2_exe)); sb_a(&md, " bytes\n");
+        sb_a(&md, "- SHA256: "); sb_a(&md, s2_hash); sb_a(&md, "\n");
+        if quick == 0 {
+            sb_a(&md, "\n");
+            sb_a(&md, "## Stage 3 (Stability)\n");
+            sb_a(&md, "- C source: "); sb_a(&md, cg_int_to_str_i64(s3_c)); sb_a(&md, " bytes\n");
+            sb_a(&md, "- Binary: "); sb_a(&md, cg_int_to_str_i64(s3_exe)); sb_a(&md, " bytes\n");
+            sb_a(&md, "- SHA256: "); sb_a(&md, s3_hash); sb_a(&md, "\n");
+        }
+        sb_a(&md, "\n");
+        sb_a(&md, "## Comparisons\n");
+        sb_a(&md, "- Stage 1 SHA256: "); sb_a(&md, s1_hash); sb_a(&md, "\n");
+        sb_a(&md, "- Stage 2 SHA256: "); sb_a(&md, s2_hash); sb_a(&md, "\n");
+        if s1_eq_s2 != 0 { sb_a(&md, "- Stage 1 == Stage 2: yes\n"); }
+        else { sb_a(&md, "- Stage 1 == Stage 2: **no**\n"); }
+        if quick == 0 {
+            sb_a(&md, "- Stage 3 SHA256: "); sb_a(&md, s3_hash); sb_a(&md, "\n");
+            if s2_eq_s3 != 0 { sb_a(&md, "- Stage 2 == Stage 3: yes (bootstrap verified!)\n"); }
+            else { sb_a(&md, "- Stage 2 == Stage 3: **no**\n"); }
+        }
+        sb_a(&md, "\n---\n*Generated by `idot bench`*\n");
+        write_str_to_file(save_path, string{ ptr = sb_get_ptr(&md), len = sb_get_len(&md) });
+        println("");
+        print("Results saved to ");
+        println(save_path);
+    }
+
+    println("Benchmark complete. Artifacts in build/bench/");
+    return 0;
+}

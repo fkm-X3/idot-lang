@@ -63,8 +63,38 @@ fn visited_add(visited: *Arena, strs: *Arena, path: string) -> void {
     arena_append_i64(visited, off);
 }
 
+fn i64_to_str(val: i64) -> string {
+    let buf = alloc(32);
+    let mut n: i64 = val;
+    let mut i: i64 = 31;
+    buf[i] = 0; i = i - 1;
+    if n == 0 { buf[i] = 48; i = i - 1; }
+    let mut neg: i32 = 0;
+    if n < 0 { neg = 1; n = -n; }
+    while n > 0 && i >= 0 {
+        buf[i] = 48 + (n % 10);
+        n = n / 10;
+        i = i - 1;
+    }
+    if neg != 0 { buf[i] = 45; i = i - 1; }
+    let start = i + 1;
+    let len = 31 - start;
+    return string{ ptr = buf + start, len = len };
+}
+
+fn print_arena_stats(label: string, arena: *Arena) -> void {
+    print_err("    ");
+    print_err(label);
+    print_err(": ");
+    print_err(i64_to_str((*arena).len));
+    print_err(" / ");
+    print_err(i64_to_str((*arena).cap));
+    print_err(" bytes");
+    print_errln("");
+}
+
 pub fn compile_file(source: string, input_path: string, base_dir: string,
-                    lib_dir: string) -> string {
+                    lib_dir: string, show_time: i32) -> string {
     let strs: Arena = arena_new(1048576);
     let types: Arena = arena_new(1048576);
     let exprs: Arena = arena_new(1048576);
@@ -160,5 +190,20 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
 
     let cg: CBackend = cg_new();
     let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
+
+    if show_time != 0 {
+        print_errln("  Arena memory usage (used / capacity):");
+        print_arena_stats("  strs", &strs);
+        print_arena_stats("  types", &types);
+        print_arena_stats("  exprs", &exprs);
+        print_arena_stats("  stmts", &stmts);
+        print_arena_stats("  decls", &decls);
+        print_arena_stats("  children", &children);
+        print_arena_stats("  fargs", &fargs);
+        print_arena_stats("  toks", &toks);
+        print_arena_stats("  visited", &visited);
+        print_arena_stats("  pending", &pending);
+    }
+
     return output;
 }

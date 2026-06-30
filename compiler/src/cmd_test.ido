@@ -24,7 +24,7 @@ fn run_one_test(test_file: string, lib_dir: string, project_dir: string) -> i32 
         return 1;
     }
 
-    let c_source = compile_file(source, test_file, project_dir, lib_dir);
+    let c_source = compile_file(source, test_file, project_dir, lib_dir, 0);
     if c_source.len == 0 {
         print_errln("COMPILE FAILED");
         return 1;
