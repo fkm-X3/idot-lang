@@ -1,0 +1,55 @@
+import "std/math";
+
+fn main() -> i32 {
+    // Test min / max with i32
+    if min(10, 20) != 10 { return 1; }
+    if min(20, 10) != 10 { return 2; }
+    if max(10, 20) != 20 { return 3; }
+    if max(20, 10) != 20 { return 4; }
+
+    // Test min / max with i64 (via generic)
+    if min(1000000000, 2000000000) != 1000000000 { return 5; }
+    if max(1000000000, 2000000000) != 2000000000 { return 6; }
+
+    // Test clamp
+    if clamp(5, 10, 20) != 10 { return 7; }
+    if clamp(15, 10, 20) != 15 { return 8; }
+    if clamp(25, 10, 20) != 20 { return 9; }
+
+    // Test abs_i32
+    if abs_i32(42) != 42 { return 10; }
+    if abs_i32(-42) != 42 { return 11; }
+    if abs_i32(0) != 0 { return 12; }
+
+    // Test abs_i64
+    if abs_i64(42) != 42 { return 13; }
+    if abs_i64(-42) != 42 { return 14; }
+
+    // Test is_power_of_two
+    if is_power_of_two(0) != false { return 15; }
+    if is_power_of_two(1) != true { return 16; }
+    if is_power_of_two(2) != true { return 17; }
+    if is_power_of_two(4) != true { return 18; }
+    if is_power_of_two(1024) != true { return 19; }
+    if is_power_of_two(3) != false { return 20; }
+    if is_power_of_two(1023) != false { return 21; }
+
+    // Test align_forward
+    if align_forward(0, 8) != 0 { return 22; }
+    if align_forward(1, 8) != 8 { return 23; }
+    if align_forward(7, 8) != 8 { return 24; }
+    if align_forward(8, 8) != 8 { return 25; }
+    if align_forward(9, 8) != 16 { return 26; }
+    if align_forward(13, 16) != 16 { return 27; }
+
+    // Test align_backward
+    if align_backward(0, 8) != 0 { return 28; }
+    if align_backward(1, 8) != 0 { return 29; }
+    if align_backward(7, 8) != 0 { return 30; }
+    if align_backward(8, 8) != 8 { return 31; }
+    if align_backward(9, 8) != 8 { return 32; }
+    if align_backward(15, 8) != 8 { return 33; }
+    if align_backward(16, 8) != 16 { return 34; }
+
+    return 0;
+}

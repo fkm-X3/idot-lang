@@ -1,0 +1,76 @@
+import "std/mem";
+
+fn main() -> i32 {
+    // Test alloc + dealloc
+    let p = alloc(100);
+    if p != null {
+        p[0] = 42;
+        p[50] = 99;
+        if p[0] != 42 { return 1; }
+        if p[50] != 99 { return 2; }
+    }
+    dealloc(p);
+
+    // Test alloc_zeroed
+    let z = alloc_zeroed(10, 4);
+    if z != null {
+        let mut i: i64 = 0;
+        while i < 40 {
+            if z[i] != 0 { return 3; }
+            i = i + 1;
+        }
+    }
+    dealloc(z);
+
+    // Test resize
+    let r = alloc(10);
+    if r != null {
+        r[0] = 10;
+        r[9] = 20;
+        let r2 = resize(r, 100);
+        if r2 != null {
+            if r2[0] != 10 { return 4; }
+            if r2[9] != 20 { return 5; }
+        }
+        dealloc(r2);
+    }
+
+    // Test zero_memory
+    let zm = alloc(50);
+    if zm != null {
+        zm[0] = 1; zm[10] = 2; zm[49] = 3;
+        zero_memory(zm, 50);
+        if zm[0] != 0 { return 6; }
+        if zm[10] != 0 { return 7; }
+        if zm[49] != 0 { return 8; }
+    }
+    dealloc(zm);
+
+    // Test copy_memory
+    let src = alloc(20);
+    let dst = alloc(20);
+    if src != null && dst != null {
+        src[0] = 11; src[1] = 22; src[2] = 33;
+        copy_memory(dst, src, 20);
+        if dst[0] != 11 { return 9; }
+        if dst[1] != 22 { return 10; }
+        if dst[2] != 33 { return 11; }
+    }
+    dealloc(src);
+    dealloc(dst);
+
+    // Test move_memory (non-overlapping)
+    let mv_src = alloc(10);
+    let mv_dst = alloc(10);
+    if mv_src != null && mv_dst != null {
+        mv_src[0] = 11; mv_src[1] = 12; mv_src[2] = 13;
+        move_memory(mv_dst, mv_src, 10);
+        if mv_dst[0] != 11 { return 12; }
+        if mv_dst[1] != 12 { return 13; }
+        if mv_dst[2] != 13 { return 14; }
+    }
+    dealloc(mv_src);
+    dealloc(mv_dst);
+
+    return 0;
+}

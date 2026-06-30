@@ -1,0 +1,50 @@
+import "std/collections";
+import "std/mem";
+
+fn main() -> i32 {
+    // Test DynamicArray basics
+    let da = da_new(1, 4);
+    if da_get_len(&da) != 0 { return 1; }
+    if da_get_capacity(&da) < 4 { return 2; }
+
+    // Append bytes
+    let mut val1: u8 = 10;
+    let mut val2: u8 = 20;
+    let mut val3: u8 = 30;
+    da_append_bytes(&da, &val1, 1);
+    da_append_bytes(&da, &val2, 1);
+    da_append_bytes(&da, &val3, 1);
+
+    if da_get_len(&da) != 3 { return 3; }
+    if da_get_capacity(&da) < 3 { return 4; }
+
+    // Verify data via get_ptr
+    let dp = da_get_ptr(&da, 0);
+    if dp[0] != 10 { return 5; }
+    if dp[1] != 20 { return 6; }
+    if dp[2] != 30 { return 7; }
+
+    da_deinit(&da);
+
+    // Test string builder
+    let sb = sb_new();
+    if sb_get_len(&sb) != 0 { return 8; }
+
+    sb_append(&sb, "Hello");
+    if sb_get_len(&sb) != 5 { return 9; }
+
+    sb_append(&sb, " World");
+    if sb_get_len(&sb) != 11 { return 10; }
+
+    // Verify string builder content
+    let sdp = sb_get_ptr(&sb);
+    if sdp[0] != 72 { return 11; }
+    if sdp[1] != 101 { return 12; }
+    if sdp[5] != 32 { return 13; }
+    if sdp[6] != 87 { return 14; }
+    if sdp[10] != 100 { return 15; }
+
+    da_deinit(&sb);
+
+    return 0;
+}

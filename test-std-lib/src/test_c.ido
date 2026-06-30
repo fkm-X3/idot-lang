@@ -1,0 +1,43 @@
+import "std/c";
+import "std/mem";
+
+fn main() -> i32 {
+    // Test strlen
+    let hello: string = "Hello";
+    let len = strlen(hello.ptr);
+    if len != 5 { return 1; }
+
+    let empty: string = "";
+    let len2 = strlen(empty.ptr);
+    if len2 != 0 { return 2; }
+
+    // Test strcmp (equal)
+    let a: string = "abc";
+    let b: string = "abc";
+    if strcmp(a.ptr, b.ptr) != 0 { return 3; }
+
+    // Test strcmp (different)
+    let c: string = "abc";
+    let d: string = "abd";
+    if strcmp(c.ptr, d.ptr) >= 0 { return 4; }
+
+    // Test strcmp (reverse)
+    if strcmp(d.ptr, c.ptr) <= 0 { return 5; }
+
+    // Test strncmp
+    if strncmp(a.ptr, d.ptr, 2) != 0 { return 6; }
+    if strncmp(a.ptr, d.ptr, 3) >= 0 { return 7; }
+
+    // Test sqrt
+    if floor(sqrt(25.0)) != 5.0 { return 8; }
+    if floor(sqrt(100.0)) != 10.0 { return 9; }
+
+    // Test fabs
+    if fabs(-3.5) != 3.5 { return 10; }
+    if fabs(3.5) != 3.5 { return 11; }
+
+    // Test pow
+    if floor(pow(2.0, 10.0)) != 1024.0 { return 12; }
+
+    return 0;
+}
