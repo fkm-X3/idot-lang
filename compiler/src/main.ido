@@ -1,51 +1,13 @@
 import "std";
-import "ast";
-import "lexer";
-import "parser";
-import "semantic";
-import "codegen";
-
-fn str_eq(a: string, b: string) -> i32 {
-    if a.len != b.len { return 0; }
-    let mut i: i64 = 0;
-    while i < a.len {
-        if a.ptr[i] != b.ptr[i] { return 0; }
-        i = i + 1;
-    }
-    return 1;
-}
-
-fn str_ends_with(s: string, suffix: string) -> i32 {
-    if s.len < suffix.len { return 0; }
-    let start = s.len - suffix.len;
-    let mut i: i64 = 0;
-    while i < suffix.len {
-        if s.ptr[start + i] != suffix.ptr[i] { return 0; }
-        i = i + 1;
-    }
-    return 1;
-}
-
-fn find_last_slash(path: string) -> i64 {
-    let mut i: i64 = path.len - 1;
-    while i >= 0 {
-        if path.ptr[i] == 47 || path.ptr[i] == 92 { return i; }
-        i = i - 1;
-    }
-    return -1;
-}
-
-fn file_stem(path: string) -> string {
-    let slash = find_last_slash(path);
-    let name_start = slash + 1;
-    let mut dot: i64 = path.len;
-    let mut i: i64 = name_start;
-    while i < path.len {
-        if path.ptr[i] == 46 { dot = i; break; }
-        i = i + 1;
-    }
-    return string{ ptr = path.ptr + name_start, len = dot - name_start };
-}
+import "util";
+import "cli";
+import "compile";
+import "cmd_new";
+import "cmd_build";
+import "cmd_run";
+import "cmd_test";
+import "cmd_add";
+import "cmd_vendor";
 
 fn build_output_path(sb: *DynamicArray, stem: string, ext: string) -> void {
     sb_append(sb, "build/");
@@ -54,193 +16,102 @@ fn build_output_path(sb: *DynamicArray, stem: string, ext: string) -> void {
     sb_append_byte(sb, 0);
 }
 
-fn build_import_path(base: string, import_name: string) -> string {
-    let slen = base.len + 1 + import_name.len;
-    let needs_ext: i32 = 0;
-    if str_ends_with(import_name, ".ido") == 0 { needs_ext = 1; }
-    let extra: i64 = 0;
-    if needs_ext != 0 { extra = 4; }
-    let buf = alloc(slen + extra + 1);
-    let mut wi: i64 = 0;
-    let mut ri: i64 = 0;
-    while ri < base.len {
-        let b: u8 = base.ptr[ri];
-        buf[wi] = b; wi = wi + 1; ri = ri + 1;
-    }
-    buf[wi] = 47; wi = wi + 1;
-    ri = 0;
-    while ri < import_name.len {
-        let b: u8 = import_name.ptr[ri];
-        buf[wi] = b; wi = wi + 1; ri = ri + 1;
-    }
-    if needs_ext != 0 {
-        buf[wi] = 46; wi = wi + 1;
-        buf[wi] = 105; wi = wi + 1;
-        buf[wi] = 100; wi = wi + 1;
-        buf[wi] = 111; wi = wi + 1;
-    }
-    buf[wi] = 0;
-    return string{ ptr = buf, len = wi };
-}
-
-fn file_exists(path: string) -> i32 {
-    let fd = open(path.ptr, 0, 0);
-    if fd < 0 { return 0; }
-    close(fd);
-    return 1;
-}
-
-fn resolve_one(import_path: string, base_dir: string, lib_dir: string, result: *string) -> i32 {
-    if base_dir.len > 0 {
-        let candidate = build_import_path(base_dir, import_path);
-        if file_exists(candidate) { (*result).ptr = candidate.ptr; (*result).len = candidate.len; return 1; }
-    }
-    if lib_dir.len > 0 {
-        let candidate = build_import_path(lib_dir, import_path);
-        if file_exists(candidate) { (*result).ptr = candidate.ptr; (*result).len = candidate.len; return 1; }
-    }
-    return 0;
-}
-
-fn visited_contains(visited: *Arena, strs: *Arena, path: string) -> i32 {
-    let mut i: i64 = 0;
-    while i < (*visited).len {
-        let off = arena_read_i64(visited, i);
-        let stored = str_read(strs, off);
-        if str_eq(path, stored) { return 1; }
-        i = i + 8;
-    }
-    return 0;
-}
-
-fn visited_add(visited: *Arena, strs: *Arena, path: string) -> void {
-    let off = str_arena_append(strs, path);
-    arena_append_i64(visited, off);
-}
-
-fn compile_with_imports(source: string, input_path: string, base_dir: string,
-                        lib_dir: string, strs: *Arena, types: *Arena,
-                        exprs: *Arena, stmts: *Arena, decls: *Arena,
-                        children: *Arena, fargs: *Arena) -> i32 {
-    let toks: Arena = arena_new(65536);
-    let mut visited: Arena = arena_new(4096);
-    let mut pending: Arena = arena_new(4096);
-
-    let src_off = str_arena_append(strs, source);
-    let path_off = str_arena_append(strs, input_path);
-    let base_off = str_arena_append(strs, base_dir);
-    arena_append_i64(&pending, src_off);
-    arena_append_i64(&pending, path_off);
-    arena_append_i64(&pending, base_off);
-
-    while pending.len > 0 {
-        let p_base_off = arena_read_i64(&pending, pending.len - 8); pending.len = pending.len - 8;
-        let p_path_off = arena_read_i64(&pending, pending.len - 8); pending.len = pending.len - 8;
-        let p_src_off = arena_read_i64(&pending, pending.len - 8); pending.len = pending.len - 8;
-
-        let p_src = str_read(strs, p_src_off);
-        let p_path = str_read(strs, p_path_off);
-        let p_base = str_read(strs, p_base_off);
-
-        if visited_contains(&visited, strs, p_path) { continue; }
-        visited_add(&visited, strs, p_path);
-
-        let decls_before = (*decls).len;
-
-        print_err("parsing: '");
-        print_err(p_path);
-        print_err("' toks: ");
-        let file_toks: Arena = arena_new(65536);
-        l_tokenize(p_src, &file_toks, strs);
-        let tok_count = file_toks.len / TOKEN_BYTES;
-        print_err(cg_int_to_str_i64(tok_count));
-        print_errln("");
-        let p = p_parser_new(p_src, &file_toks, strs, types, exprs, stmts, decls, children, fargs);
-        p_parse_program(&p);
-
-        let decls_after = (*decls).len;
-        let mut di: i64 = decls_before;
-        while di < decls_after {
-            let tag = decl_get_tag(decls, di);
-            if tag == DC_IMPORT {
-                let import_name_off = decl_get_name(decls, di);
-                let import_name = str_read(strs, import_name_off);
-
-                let resolved_path_s: string = string{ ptr = alloc(1), len = 0 };
-                let found = resolve_one(import_name, p_base, lib_dir, &resolved_path_s);
-                if found == 0 {
-                    print_err("import not found: '");
-                    print_err(import_name);
-                    print_errln("'");
-                    return 1;
-                }
-
-                if visited_contains(&visited, strs, resolved_path_s) { di = di + DECL_BYTES; continue; }
-
-                let import_src = read_entire_file(resolved_path_s);
-                if import_src.len == 0 {
-                    print_err("error reading import: '");
-                    print_err(resolved_path_s);
-                    print_errln("'");
-                    return 1;
-                }
-
-                let imp_slash = find_last_slash(resolved_path_s);
-                let imp_base: string;
-                if imp_slash >= 0 {
-                    imp_base = string{ ptr = resolved_path_s.ptr, len = imp_slash };
-                } else {
-                    imp_base = string{ ptr = alloc(1), len = 0 };
-                }
-
-                let import_src_off = str_arena_append(strs, import_src);
-                let imp_path_off = str_arena_append(strs, resolved_path_s);
-                let imp_base_off = str_arena_append(strs, imp_base);
-
-                arena_append_i64(&pending, import_src_off);
-                arena_append_i64(&pending, imp_path_off);
-                arena_append_i64(&pending, imp_base_off);
-            }
-            di = di + DECL_BYTES;
-        }
-    }
-
-    return 0;
-}
-
-fn is_flag(arg: string, flag: string) -> i32 {
-    if arg.len != flag.len + 2 { return 0; }
-    if arg.ptr[0] != 45 || arg.ptr[1] != 45 { return 0; }
-    let mut i: i64 = 0;
-    while i < flag.len {
-        if arg.ptr[i + 2] != flag.ptr[i] { return 0; }
-        i = i + 1;
-    }
-    return 1;
-}
-
 pub fn main() -> i32 {
     let argc_val = __ido_get_argc();
-    if argc_val < 3 {
-        print_errln("Usage: idot compile <file.ido> [--emit-c] [--lib-dir <dir>]");
-        print_errln("       idot run    <file.ido> [--lib-dir <dir>]");
+    if argc_val < 2 {
+        print_usage();
         return 1;
     }
 
-    let cmd = __ido_get_argv(1);
-    let cmd_str = string{ ptr = cmd, len = strlen(cmd) };
-    let input_path = __ido_get_argv(2);
-    let input_str = string{ ptr = input_path, len = strlen(input_path) };
+    let cmd_ptr = __ido_get_argv(1);
+    let cmd_str = string{ ptr = cmd_ptr, len = strlen(cmd_ptr) };
+    let cmd = parse_command(cmd_str);
+
+    if cmd == CMD_HELP || cmd == CMD_UNKNOWN {
+        print_usage();
+        return 0;
+    }
+
+    if cmd == CMD_NEW {
+        if argc_val < 3 {
+            print_errln("Usage: idot new <project-name>");
+            return 1;
+        }
+        let name_ptr = __ido_get_argv(2);
+        let name_str = string{ ptr = name_ptr, len = strlen(name_ptr) };
+        return cmd_new(name_str);
+    }
+
+    if cmd == CMD_BUILD {
+        return cmd_build(".");
+    }
+
+    if cmd == CMD_RUN {
+        return cmd_run(".");
+    }
+
+    if cmd == CMD_TEST {
+        let self_hosted: i32 = 0;
+        let mut i: i64 = 2;
+        while i < argc_val {
+            let arg_ptr = __ido_get_argv(i);
+            let arg_str = string{ ptr = arg_ptr, len = strlen(arg_ptr) };
+            if is_flag(arg_str, "self-hosted") != 0 { self_hosted = 1; }
+            i = i + 1;
+        }
+        return cmd_test(".", self_hosted);
+    }
+
+    if cmd == CMD_ADD {
+        if argc_val < 3 {
+            print_errln("Usage: idot add <name> [git_url] [tag]");
+            return 1;
+        }
+        let name_ptr = __ido_get_argv(2);
+        let name_str = string{ ptr = name_ptr, len = strlen(name_ptr) };
+        let mut git_str: string = string{ ptr = alloc(1), len = 0 };
+        let mut tag_str: string = string{ ptr = alloc(1), len = 0 };
+        if argc_val >= 4 {
+            let g_ptr = __ido_get_argv(3);
+            git_str = string{ ptr = g_ptr, len = strlen(g_ptr) };
+        }
+        if argc_val >= 5 {
+            let t_ptr = __ido_get_argv(4);
+            tag_str = string{ ptr = t_ptr, len = strlen(t_ptr) };
+        }
+        return cmd_add(".", name_str, git_str, tag_str);
+    }
+
+    if cmd == CMD_REMOVE {
+        if argc_val < 3 {
+            print_errln("Usage: idot remove <name>");
+            return 1;
+        }
+        let name_ptr = __ido_get_argv(2);
+        let name_str = string{ ptr = name_ptr, len = strlen(name_ptr) };
+        return cmd_remove(".", name_str);
+    }
+
+    if cmd == CMD_VENDOR {
+        return cmd_vendor(".");
+    }
+
+    // Compiler commands (compile / run for individual files)
+    if argc_val < 3 {
+        print_usage();
+        return 1;
+    }
+
+    let input_ptr = __ido_get_argv(2);
+    let input_str = string{ ptr = input_ptr, len = strlen(input_ptr) };
 
     let emit_c: i32 = 0;
     let mut lib_dir: string = string{ ptr = alloc(1), len = 0 };
     let mut i: i64 = 3;
     while i < argc_val {
-        let arg = __ido_get_argv(i);
-        let arg_str = string{ ptr = arg, len = strlen(arg) };
-        if is_flag(arg_str, "emit-c") != 0 {
-            emit_c = 1;
-        }
+        let arg_ptr = __ido_get_argv(i);
+        let arg_str = string{ ptr = arg_ptr, len = strlen(arg_ptr) };
+        if is_flag(arg_str, "emit-c") != 0 { emit_c = 1; }
         if is_flag(arg_str, "lib-dir") != 0 {
             i = i + 1;
             if i < argc_val {
@@ -270,38 +141,11 @@ pub fn main() -> i32 {
         return 1;
     }
 
-    let strs: Arena = arena_new(1048576);
-    let types: Arena = arena_new(1048576);
-    let exprs: Arena = arena_new(1048576);
-    let stmts: Arena = arena_new(262144);
-    let decls: Arena = arena_new(1048576);
-    let children: Arena = arena_new(524288);
-    let fargs: Arena = arena_new(65536);
-
-    let result = compile_with_imports(source, input_str, base_dir, lib_dir,
-        &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
-
-    if result != 0 {
+    let output = compile_file(source, input_str, base_dir, lib_dir);
+    if output.len == 0 {
         print_errln("compilation failed");
         return 1;
     }
-
-    let decl_count = decls.len / DECL_BYTES;
-    print_err("parsed ");
-    print_err(cg_int_to_str_i64(decl_count));
-    print_errln(" declarations");
-
-    let dummy_toks: Arena = arena_new(64);
-    let ctx = s_sem_new(source, &dummy_toks, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
-    s_sem_analyze(&ctx);
-    print_errln("semantic analysis done");
-
-    let cg: CBackend = cg_new();
-    let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
-    print_err("C output: ");
-    let out_len_s = cg_int_to_str_i64(output.len);
-    print_err(out_len_s);
-    print_errln(" bytes");
 
     let stem = file_stem(input_str);
     let mut c_path_sb = sb_new();
@@ -317,19 +161,18 @@ pub fn main() -> i32 {
         return 0;
     }
 
-    // Build and run clang compilation command
     let mut exe_path_sb = sb_new();
     build_output_path(&exe_path_sb, stem, ".exe");
     let exe_path = string{ ptr = sb_get_ptr(&exe_path_sb), len = sb_get_len(&exe_path_sb) - 1 };
 
-    let mut cmd_sb = sb_new();
-    sb_append(&cmd_sb, "clang -o ");
-    sb_append(&cmd_sb, exe_path);
-    sb_append(&cmd_sb, " ");
-    sb_append(&cmd_sb, c_path);
-    sb_append_byte(&cmd_sb, 0);
+    let mut cmd_line_sb = sb_new();
+    sb_append(&cmd_line_sb, "clang -o ");
+    sb_append(&cmd_line_sb, exe_path);
+    sb_append(&cmd_line_sb, " ");
+    sb_append(&cmd_line_sb, c_path);
+    sb_append_byte(&cmd_line_sb, 0);
 
-    let cmd_line = string{ ptr = sb_get_ptr(&cmd_sb), len = sb_get_len(&cmd_sb) };
+    let cmd_line = string{ ptr = sb_get_ptr(&cmd_line_sb), len = sb_get_len(&cmd_line_sb) };
     print_err("running: ");
     print_errln(cmd_line);
     let rc = system(cmd_line.ptr);
@@ -338,10 +181,10 @@ pub fn main() -> i32 {
         return 1;
     }
 
-    if str_eq(cmd_str, "run") != 0 {
+    if cmd == CMD_RUN {
         print_err("running: ");
         print_errln(exe_path);
-        let exe_cmd_sb = sb_new();
+        let mut exe_cmd_sb = sb_new();
         sb_append(&exe_cmd_sb, exe_path);
         sb_append_byte(&exe_cmd_sb, 0);
         let exe_cmd = string{ ptr = sb_get_ptr(&exe_cmd_sb), len = sb_get_len(&exe_cmd_sb) };

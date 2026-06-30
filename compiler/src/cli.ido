@@ -1,0 +1,67 @@
+import "std";
+
+pub const CMD_COMPILE: i32 = 0;
+pub const CMD_RUN: i32 = 1;
+pub const CMD_NEW: i32 = 2;
+pub const CMD_BUILD: i32 = 3;
+pub const CMD_TEST: i32 = 4;
+pub const CMD_ADD: i32 = 5;
+pub const CMD_REMOVE: i32 = 6;
+pub const CMD_VENDOR: i32 = 7;
+pub const CMD_UNKNOWN: i32 = -1;
+pub const CMD_HELP: i32 = -2;
+
+fn str_eq_cli(a: string, b: string) -> i32 {
+    if a.len != b.len { return 0; }
+    let mut i: i64 = 0;
+    while i < a.len {
+        if a.ptr[i] != b.ptr[i] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+pub fn parse_command(arg: string) -> i32 {
+    if str_eq_cli(arg, "compile") { return CMD_COMPILE; }
+    if str_eq_cli(arg, "run") { return CMD_RUN; }
+    if str_eq_cli(arg, "new") { return CMD_NEW; }
+    if str_eq_cli(arg, "build") { return CMD_BUILD; }
+    if str_eq_cli(arg, "test") { return CMD_TEST; }
+    if str_eq_cli(arg, "add") { return CMD_ADD; }
+    if str_eq_cli(arg, "remove") { return CMD_REMOVE; }
+    if str_eq_cli(arg, "vendor") { return CMD_VENDOR; }
+    if str_eq_cli(arg, "help") { return CMD_HELP; }
+    return CMD_UNKNOWN;
+}
+
+pub fn is_flag(arg: string, flag: string) -> i32 {
+    if arg.len != flag.len + 2 { return 0; }
+    if arg.ptr[0] != 45 || arg.ptr[1] != 45 { return 0; }
+    let mut i: i64 = 0;
+    while i < flag.len {
+        if arg.ptr[i + 2] != flag.ptr[i] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+pub fn print_usage() -> void {
+    print_errln("Usage: idot <command> [options]");
+    print_errln("");
+    print_errln("Compiler commands:");
+    print_errln("  compile <file>       Compile an .ido file");
+    print_errln("  run <file>           Compile and run an .ido file");
+    print_errln("");
+    print_errln("Project commands:");
+    print_errln("  new <name>           Create a new project");
+    print_errln("  build                Build the project in current directory");
+    print_errln("  run                  Build and run the project");
+    print_errln("  test [--self-hosted] Run tests");
+    print_errln("  add <name> [url]     Add a dependency");
+    print_errln("  remove <name>        Remove a dependency");
+    print_errln("  vendor               Download all dependencies");
+    print_errln("");
+    print_errln("Compiler flags:");
+    print_errln("  --emit-c             Emit C source without compiling");
+    print_errln("  --lib-dir <dir>      Specify library directory");
+}

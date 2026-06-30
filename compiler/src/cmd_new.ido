@@ -1,0 +1,50 @@
+import "std";
+import "util";
+import "manifest";
+
+pub fn cmd_new(project_name: string) -> i32 {
+    let mut path_sb = sb_new();
+    sb_append(&path_sb, project_name);
+    sb_append_byte(&path_sb, 0);
+    let path_str = string{ ptr = sb_get_ptr(&path_sb), len = sb_get_len(&path_sb) - 1 };
+
+    if file_exists(path_str) != 0 {
+        print_err("Error: directory '");
+        print_err(project_name);
+        print_errln("' already exists");
+        return 1;
+    }
+
+    let mut cmd = sb_new();
+    sb_append(&cmd, "mkdir \"");
+    sb_append(&cmd, project_name);
+    sb_append(&cmd, "\\src\"");
+    sb_append_byte(&cmd, 0);
+    let cmd_line = string{ ptr = sb_get_ptr(&cmd), len = sb_get_len(&cmd) };
+    let rc = system(cmd_line.ptr);
+    if rc != 0 {
+        print_errln("Error creating project directory");
+        return 1;
+    }
+
+    let manifest_content = manifest_template(project_name);
+    let mut mf_path = sb_new();
+    sb_append(&mf_path, project_name);
+    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_byte(&mf_path, 0);
+    let mf_path_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
+    write_str_to_file(mf_path_str, manifest_content);
+
+    let mut src_path = sb_new();
+    sb_append(&src_path, project_name);
+    sb_append(&src_path, "\\src\\main.ido");
+    sb_append_byte(&src_path, 0);
+    let src_path_str = string{ ptr = sb_get_ptr(&src_path), len = sb_get_len(&src_path) - 1 };
+    let main_src: string = "fn main() -> i32 {\n    return 0;\n}\n";
+    write_str_to_file(src_path_str, main_src);
+
+    print("Created project '");
+    print(project_name);
+    print_errln("'");
+    return 0;
+}

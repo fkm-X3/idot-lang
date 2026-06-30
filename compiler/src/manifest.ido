@@ -1,0 +1,227 @@
+import "std";
+import "util";
+
+struct DepEntry {
+    name_off: i64,
+    git_off: i64,
+    tag_off: i64,
+    branch_off: i64,
+}
+
+struct Manifest {
+    name_off: i64,
+    version_off: i64,
+    license_off: i64,
+    deps_data: *u8,
+    deps_len: i64,
+    deps_cap: i64,
+}
+
+pub fn manifest_new() -> Manifest {
+    let cap: i64 = 64;
+    return Manifest{
+        name_off = 0,
+        version_off = 0,
+        license_off = 0,
+        deps_data = alloc(cap),
+        deps_len = 0,
+        deps_cap = cap,
+    };
+}
+
+const DEP_BYTES: i64 = 32;
+
+fn dep_grow(m: *Manifest, needed: i64) -> void {
+    if needed > (*m).deps_cap {
+        let new_cap = (*m).deps_cap * 2;
+        if new_cap < needed { new_cap = needed; }
+        (*m).deps_data = resize((*m).deps_data, new_cap);
+        (*m).deps_cap = new_cap;
+    }
+}
+
+fn dep_append(m: *Manifest, entry: *DepEntry) -> void {
+    let needed = (*m).deps_len + DEP_BYTES;
+    dep_grow(m, needed);
+    let base: i64 = (*m).deps_len;
+    let n = (*entry).name_off;
+    memcpy((*m).deps_data + base + 0, &n, 8);
+    let g = (*entry).git_off;
+    memcpy((*m).deps_data + base + 8, &g, 8);
+    let t = (*entry).tag_off;
+    memcpy((*m).deps_data + base + 16, &t, 8);
+    let b = (*entry).branch_off;
+    memcpy((*m).deps_data + base + 24, &b, 8);
+    (*m).deps_len = needed;
+}
+
+pub fn dep_get(m: *Manifest, idx: i64, out: *DepEntry) -> void {
+    let off: i64 = idx * DEP_BYTES;
+    let mut r: i64 = 0;
+    memcpy(&r, (*m).deps_data + off + 0, 8); (*out).name_off = r;
+    memcpy(&r, (*m).deps_data + off + 8, 8); (*out).git_off = r;
+    memcpy(&r, (*m).deps_data + off + 16, 8); (*out).tag_off = r;
+    memcpy(&r, (*m).deps_data + off + 24, 8); (*out).branch_off = r;
+}
+
+pub fn dep_count(m: *Manifest) -> i64 {
+    return (*m).deps_len / DEP_BYTES;
+}
+
+fn str_is(s: string, expected: *u8, expected_len: i64) -> i32 {
+    if s.len != expected_len { return 0; }
+    let mut i: i64 = 0;
+    while i < expected_len {
+        if s.ptr[i] != expected[i] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn str_is_lit(s: string, lit: string) -> i32 {
+    if s.len != lit.len { return 0; }
+    let mut i: i64 = 0;
+    while i < s.len {
+        if s.ptr[i] != lit.ptr[i] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn is_nl(c: u8) -> i32 {
+    return c == 10 || c == 13;
+}
+
+fn skip_line(s: string, pos: i64) -> i64 {
+    let mut p = pos;
+    while p < s.len {
+        if is_nl(s.ptr[p]) { return p + 1; }
+        p = p + 1;
+    }
+    return p;
+}
+
+fn trim_start(s: string, pos: i64) -> i64 {
+    let mut p = pos;
+    while p < s.len && is_ws(s.ptr[p]) { p = p + 1; }
+    return p;
+}
+
+fn unquote_str(s: string) -> string {
+    if s.len >= 2 && s.ptr[0] == 34 && s.ptr[s.len - 1] == 34 {
+        return string{ ptr = s.ptr + 1, len = s.len - 2 };
+    }
+    return s;
+}
+
+pub fn manifest_parse(content: string, strs: *Arena) -> Manifest {
+    let mut m = manifest_new();
+    let mut in_deps: i32 = 0;
+    let mut p: i64 = 0;
+
+    while p < content.len {
+        p = trim_start(content, p);
+        if p >= content.len { break; }
+        let c = content.ptr[p];
+        if c == 35 { p = skip_line(content, p); continue; }
+        if is_nl(c) { p = p + 1; continue; }
+        if c == 91 {
+            p = p + 1;
+            let sec_start = p;
+            while p < content.len && content.ptr[p] != 93 { p = p + 1; }
+            let sec_end = p;
+            if p < content.len { p = p + 1; }
+            let sec = string{ ptr = content.ptr + sec_start, len = sec_end - sec_start };
+            if str_is_lit(sec, "project") { in_deps = 0; continue; }
+            if str_is_lit(sec, "dependencies") { in_deps = 1; continue; }
+            continue;
+        }
+        let line_start = p;
+        p = skip_line(content, p);
+        if p - line_start <= 1 { continue; }
+        let line = string{ ptr = content.ptr + line_start, len = p - line_start };
+        while line.len > 0 && (line.ptr[line.len - 1] == 10 || line.ptr[line.len - 1] == 13) {
+            line.len = line.len - 1;
+        }
+        let mut eq_pos: i64 = -1;
+        let mut eq_i: i64 = 0;
+        while eq_i < line.len {
+            if line.ptr[eq_i] == 61 { eq_pos = eq_i; break; }
+            eq_i = eq_i + 1;
+        }
+        if eq_pos < 0 { continue; }
+        let mut ke = eq_pos;
+        while ke > 0 && is_ws(line.ptr[ke - 1]) { ke = ke - 1; }
+        let key = string{ ptr = line.ptr, len = ke };
+        let mut vs = eq_pos + 1;
+        while vs < line.len && is_ws(line.ptr[vs]) { vs = vs + 1; }
+        let mut ve = line.len;
+        while ve > vs && is_ws(line.ptr[ve - 1]) { ve = ve - 1; }
+        let val = string{ ptr = line.ptr + vs, len = ve - vs };
+
+        if in_deps != 0 {
+            let dname = unquote_str(key);
+            let mut git_off: i64 = 0;
+            let mut tag_off: i64 = 0;
+            let mut branch_off: i64 = 0;
+            let mut cp = trim_start(val, 0);
+            if cp < val.len && val.ptr[cp] == 123 {
+                cp = cp + 1;
+                while cp < val.len && val.ptr[cp] != 125 {
+                    cp = trim_start(val, cp);
+                    if cp >= val.len || val.ptr[cp] == 125 { break; }
+                    let kv_s = cp;
+                    while cp < val.len && val.ptr[cp] != 44 && val.ptr[cp] != 125 { cp = cp + 1; }
+                    let kv = string{ ptr = val.ptr + kv_s, len = cp - kv_s };
+                    let mut keq: i64 = -1;
+                    let mut ki: i64 = 0;
+                    while ki < kv.len {
+                        if kv.ptr[ki] == 61 { keq = ki; break; }
+                        ki = ki + 1;
+                    }
+                    if keq > 0 {
+                        let mut kke = keq;
+                        while kke > 0 && is_ws(kv.ptr[kke - 1]) { kke = kke - 1; }
+                        let kk = string{ ptr = kv.ptr, len = kke };
+                        let mut kvs = keq + 1;
+                        while kvs < kv.len && is_ws(kv.ptr[kvs]) { kvs = kvs + 1; }
+                        let mut kve = kv.len;
+                        while kve > kvs && is_ws(kv.ptr[kve - 1]) { kve = kve - 1; }
+                        let kv_val = unquote_str(string{ ptr = kv.ptr + kvs, len = kve - kvs });
+                        if str_is_lit(kk, "git") { git_off = str_arena_append(strs, kv_val); }
+                        if str_is_lit(kk, "tag") { tag_off = str_arena_append(strs, kv_val); }
+                        if str_is_lit(kk, "branch") { branch_off = str_arena_append(strs, kv_val); }
+                    }
+                    cp = cp + 1;
+                }
+            }
+            let name_off = str_arena_append(strs, dname);
+            let entry = DepEntry{ name_off = name_off, git_off = git_off, tag_off = tag_off, branch_off = branch_off };
+            dep_append(&m, &entry);
+        } else {
+            let val_off = str_arena_append(strs, unquote_str(val));
+            if str_is_lit(key, "name") { m.name_off = val_off; }
+            if str_is_lit(key, "version") { m.version_off = val_off; }
+            if str_is_lit(key, "license") { m.license_off = val_off; }
+        }
+    }
+    return m;
+}
+
+pub fn manifest_load(path: string, strs: *Arena) -> Manifest {
+    let content = read_entire_file(path);
+    return manifest_parse(content, strs);
+}
+
+pub fn manifest_template(name: string) -> string {
+    let sb = sb_new();
+    sb_append(&sb, "[project]\n");
+    sb_append(&sb, "name = \"");
+    sb_append(&sb, name);
+    sb_append(&sb, "\"\n");
+    sb_append(&sb, "version = \"0.1.0\"\n");
+    sb_append(&sb, "license = \"MIT\"\n\n");
+    sb_append(&sb, "[dependencies]\n");
+    sb_append_byte(&sb, 0);
+    return string{ ptr = sb_get_ptr(&sb), len = sb_get_len(&sb) - 1 };
+}

@@ -1,0 +1,181 @@
+import "std";
+import "util";
+import "ast";
+import "codegen";
+import "manifest";
+import "compile";
+
+fn is_test_file(name: string) -> i32 {
+    let suffix: string = "_test";
+    let prefix: string = "test_";
+    if str_ends_with(name, suffix) != 0 { return 1; }
+    if str_starts_with(name, prefix) != 0 { return 1; }
+    return 0;
+}
+
+fn run_one_test(test_file: string, lib_dir: string, project_dir: string) -> i32 {
+    let stem = file_stem(test_file);
+    print(stem);
+    print(" ... ");
+
+    let source = read_entire_file(test_file);
+    if source.len == 0 {
+        print_errln("READ FAILED");
+        return 1;
+    }
+
+    let c_source = compile_file(source, test_file, project_dir, lib_dir);
+    if c_source.len == 0 {
+        print_errln("COMPILE FAILED");
+        return 1;
+    }
+
+    let mut build_cmd = sb_new();
+    sb_append(&build_cmd, "if not exist \"");
+    sb_append(&build_cmd, project_dir);
+    sb_append(&build_cmd, "\\build\" mkdir \"");
+    sb_append(&build_cmd, project_dir);
+    sb_append(&build_cmd, "\\build\"");
+    sb_append_byte(&build_cmd, 0);
+    let build_cmd_line = string{ ptr = sb_get_ptr(&build_cmd), len = sb_get_len(&build_cmd) };
+    system(build_cmd_line.ptr);
+
+    let mut c_path = sb_new();
+    sb_append(&c_path, project_dir);
+    sb_append(&c_path, "\\build\\");
+    sb_append(&c_path, stem);
+    sb_append(&c_path, ".c");
+    sb_append_byte(&c_path, 0);
+    let c_path_str = string{ ptr = sb_get_ptr(&c_path), len = sb_get_len(&c_path) - 1 };
+
+    let mut exe_path = sb_new();
+    sb_append(&exe_path, project_dir);
+    sb_append(&exe_path, "\\build\\");
+    sb_append(&exe_path, stem);
+    sb_append(&exe_path, ".exe");
+    sb_append_byte(&exe_path, 0);
+    let exe_path_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
+
+    write_str_to_file(c_path_str, c_source);
+
+    let mut cc_cmd = sb_new();
+    sb_append(&cc_cmd, "clang -o \"");
+    sb_append(&cc_cmd, exe_path_str);
+    sb_append(&cc_cmd, "\" \"");
+    sb_append(&cc_cmd, c_path_str);
+    sb_append(&cc_cmd, "\"");
+    sb_append_byte(&cc_cmd, 0);
+    let cc_line = string{ ptr = sb_get_ptr(&cc_cmd), len = sb_get_len(&cc_cmd) };
+    let rc = system(cc_line.ptr);
+    if rc != 0 {
+        print_errln("CC FAILED");
+        return 1;
+    }
+
+    let mut run_cmd = sb_new();
+    sb_append(&run_cmd, exe_path_str);
+    sb_append_byte(&run_cmd, 0);
+    let run_line = string{ ptr = sb_get_ptr(&run_cmd), len = sb_get_len(&run_cmd) };
+    let exit_code = system(run_line.ptr);
+
+    print_err("exit code ");
+    print_errln(cg_int_to_str_i64(exit_code));
+    if exit_code != 0 { return 1; }
+    return 0;
+}
+
+pub fn cmd_test(project_dir: string, self_hosted: i32) -> i32 {
+    let lib_dir: string = "lib";
+    let mut passed: i64 = 0;
+    let mut failed: i64 = 0;
+
+    // Use a batch file to list test files (cross-platform dir listing wrapper)
+    let mut bat = sb_new();
+    sb_append(&bat, "@echo off\n");
+    sb_append(&bat, "if exist \"");
+    sb_append(&bat, project_dir);
+    sb_append(&bat, "\\src\\*_test.ido\" dir /b \"");
+    sb_append(&bat, project_dir);
+    sb_append(&bat, "\\src\\*_test.ido\"\n");
+    sb_append(&bat, "if exist \"");
+    sb_append(&bat, project_dir);
+    sb_append(&bat, "\\tests\\*.ido\" dir /b \"");
+    sb_append(&bat, project_dir);
+    sb_append(&bat, "\\tests\\*.ido\"\n");
+    sb_append_byte(&bat, 0);
+    let bat_content = string{ ptr = sb_get_ptr(&bat), len = sb_get_len(&bat) };
+    write_str_to_file("_list_tests.bat", bat_content);
+
+    let mut list_cmd = sb_new();
+    sb_append(&list_cmd, "cmd /c _list_tests.bat > _test_list.txt");
+    sb_append_byte(&list_cmd, 0);
+    let list_cmd_line = string{ ptr = sb_get_ptr(&list_cmd), len = sb_get_len(&list_cmd) };
+    system(list_cmd_line.ptr);
+
+    let list_content = read_entire_file("_test_list.txt");
+
+    // Parse each line and run the corresponding test
+    if list_content.len > 0 {
+        let mut line_start: i64 = 0;
+        let mut i: i64 = 0;
+        while i <= list_content.len {
+            if i == list_content.len || list_content.ptr[i] == 10 || list_content.ptr[i] == 13 {
+                if i > line_start {
+                    let mut line = string{ ptr = list_content.ptr + line_start, len = i - line_start };
+                    while line.len > 0 && (line.ptr[line.len - 1] == 10 || line.ptr[line.len - 1] == 13 || line.ptr[line.len - 1] == 32) {
+                        line.len = line.len - 1;
+                    }
+                    if line.len > 0 && str_ends_with(line, ".ido") != 0 {
+                        let name = file_stem(line);
+                        if is_test_file(name) != 0 {
+                            // Try src/ then tests/
+                            let mut fp = sb_new();
+                            sb_append(&fp, project_dir);
+                            sb_append(&fp, "\\src\\");
+                            sb_append(&fp, line);
+                            sb_append_byte(&fp, 0);
+                            let fp_str = string{ ptr = sb_get_ptr(&fp), len = sb_get_len(&fp) - 1 };
+                            let mut test_path: string = fp_str;
+                            if file_exists(fp_str) == 0 {
+                                let mut fp2 = sb_new();
+                                sb_append(&fp2, project_dir);
+                                sb_append(&fp2, "\\tests\\");
+                                sb_append(&fp2, line);
+                                sb_append_byte(&fp2, 0);
+                                let fp2_str = string{ ptr = sb_get_ptr(&fp2), len = sb_get_len(&fp2) - 1 };
+                                if file_exists(fp2_str) != 0 { test_path = fp2_str; }
+                            }
+                            if file_exists(test_path) != 0 {
+                                let result = run_one_test(test_path, lib_dir, project_dir);
+                                if result == 0 { passed = passed + 1; }
+                                else { failed = failed + 1; }
+                            }
+                        }
+                    }
+                }
+                while i < list_content.len && (list_content.ptr[i] == 10 || list_content.ptr[i] == 13) { i = i + 1; }
+                line_start = i;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+
+    // Cleanup
+    let cleanup_cmd: string = "del _list_tests.bat _test_list.txt 2>nul";
+    system(cleanup_cmd.ptr);
+
+    if passed == 0 && failed == 0 {
+        print_errln("No tests found");
+        return 0;
+    }
+
+    print_err("\nResults: ");
+    print_err(cg_int_to_str_i64(passed));
+    print_err(" passed, ");
+    print_err(cg_int_to_str_i64(failed));
+    print_errln(" failed (non-zero exit)");
+
+    if failed > 0 { return 1; }
+    return 0;
+}

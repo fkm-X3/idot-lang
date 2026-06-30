@@ -1,0 +1,164 @@
+import "std";
+import "ast";
+import "lexer";
+import "parser";
+import "semantic";
+import "codegen";
+import "util";
+
+fn build_import_path(base: string, import_name: string) -> string {
+    let slen = base.len + 1 + import_name.len;
+    let needs_ext: i32 = 0;
+    if str_ends_with(import_name, ".ido") == 0 { needs_ext = 1; }
+    let extra: i64 = 0;
+    if needs_ext != 0 { extra = 4; }
+    let buf = alloc(slen + extra + 1);
+    let mut wi: i64 = 0;
+    let mut ri: i64 = 0;
+    while ri < base.len {
+        let b: u8 = base.ptr[ri];
+        buf[wi] = b; wi = wi + 1; ri = ri + 1;
+    }
+    buf[wi] = 47; wi = wi + 1;
+    ri = 0;
+    while ri < import_name.len {
+        let b: u8 = import_name.ptr[ri];
+        buf[wi] = b; wi = wi + 1; ri = ri + 1;
+    }
+    if needs_ext != 0 {
+        buf[wi] = 46; wi = wi + 1;
+        buf[wi] = 105; wi = wi + 1;
+        buf[wi] = 100; wi = wi + 1;
+        buf[wi] = 111; wi = wi + 1;
+    }
+    buf[wi] = 0;
+    return string{ ptr = buf, len = wi };
+}
+
+fn resolve_one(import_path: string, base_dir: string, lib_dir: string, result: *string) -> i32 {
+    if base_dir.len > 0 {
+        let candidate = build_import_path(base_dir, import_path);
+        if file_exists(candidate) { (*result).ptr = candidate.ptr; (*result).len = candidate.len; return 1; }
+    }
+    if lib_dir.len > 0 {
+        let candidate = build_import_path(lib_dir, import_path);
+        if file_exists(candidate) { (*result).ptr = candidate.ptr; (*result).len = candidate.len; return 1; }
+    }
+    return 0;
+}
+
+fn visited_contains(visited: *Arena, strs: *Arena, path: string) -> i32 {
+    let mut i: i64 = 0;
+    while i < (*visited).len {
+        let off = arena_read_i64(visited, i);
+        let stored = str_read(strs, off);
+        if str_eq(path, stored) { return 1; }
+        i = i + 8;
+    }
+    return 0;
+}
+
+fn visited_add(visited: *Arena, strs: *Arena, path: string) -> void {
+    let off = str_arena_append(strs, path);
+    arena_append_i64(visited, off);
+}
+
+pub fn compile_file(source: string, input_path: string, base_dir: string,
+                    lib_dir: string) -> string {
+    let strs: Arena = arena_new(1048576);
+    let types: Arena = arena_new(1048576);
+    let exprs: Arena = arena_new(1048576);
+    let stmts: Arena = arena_new(262144);
+    let decls: Arena = arena_new(1048576);
+    let children: Arena = arena_new(524288);
+    let fargs: Arena = arena_new(65536);
+    let toks: Arena = arena_new(65536);
+    let mut visited: Arena = arena_new(4096);
+    let mut pending: Arena = arena_new(4096);
+
+    let src_off = str_arena_append(&strs, source);
+    let path_off = str_arena_append(&strs, input_path);
+    let base_off = str_arena_append(&strs, base_dir);
+    arena_append_i64(&pending, src_off);
+    arena_append_i64(&pending, path_off);
+    arena_append_i64(&pending, base_off);
+
+    while pending.len > 0 {
+        let p_base_off = arena_read_i64(&pending, pending.len - 8); pending.len = pending.len - 8;
+        let p_path_off = arena_read_i64(&pending, pending.len - 8); pending.len = pending.len - 8;
+        let p_src_off = arena_read_i64(&pending, pending.len - 8); pending.len = pending.len - 8;
+
+        let p_src = str_read(&strs, p_src_off);
+        let p_path = str_read(&strs, p_path_off);
+        let p_base = str_read(&strs, p_base_off);
+
+        if visited_contains(&visited, &strs, p_path) { continue; }
+        visited_add(&visited, &strs, p_path);
+
+        let decls_before = decls.len;
+
+        let file_toks: Arena = arena_new(65536);
+        l_tokenize(p_src, &file_toks, &strs);
+        let p = p_parser_new(p_src, &file_toks, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
+        p_parse_program(&p);
+
+        let decls_after = decls.len;
+        let mut di: i64 = decls_before;
+        while di < decls_after {
+            let tag = decl_get_tag(&decls, di);
+            if tag == DC_IMPORT {
+                let import_name_off = decl_get_name(&decls, di);
+                let import_name = str_read(&strs, import_name_off);
+
+                let resolved_path_s: string = string{ ptr = alloc(1), len = 0 };
+                let found = resolve_one(import_name, p_base, lib_dir, &resolved_path_s);
+                if found == 0 {
+                    print_err("import not found: '");
+                    print_err(import_name);
+                    print_errln("'");
+                    return string{ ptr = alloc(1), len = 0 };
+                }
+
+                if visited_contains(&visited, &strs, resolved_path_s) { di = di + DECL_BYTES; continue; }
+
+                let import_src = read_entire_file(resolved_path_s);
+                if import_src.len == 0 {
+                    print_err("error reading import: '");
+                    print_err(resolved_path_s);
+                    print_errln("'");
+                    return string{ ptr = alloc(1), len = 0 };
+                }
+
+                let imp_slash = find_last_slash(resolved_path_s);
+                let imp_base: string;
+                if imp_slash >= 0 {
+                    imp_base = string{ ptr = resolved_path_s.ptr, len = imp_slash };
+                } else {
+                    imp_base = string{ ptr = alloc(1), len = 0 };
+                }
+
+                let import_src_off = str_arena_append(&strs, import_src);
+                let imp_path_off = str_arena_append(&strs, resolved_path_s);
+                let imp_base_off = str_arena_append(&strs, imp_base);
+
+                arena_append_i64(&pending, import_src_off);
+                arena_append_i64(&pending, imp_path_off);
+                arena_append_i64(&pending, imp_base_off);
+            }
+            di = di + DECL_BYTES;
+        }
+    }
+
+    let decl_count = decls.len / DECL_BYTES;
+    if decl_count == 0 {
+        return string{ ptr = alloc(1), len = 0 };
+    }
+
+    let dummy_toks: Arena = arena_new(64);
+    let ctx = s_sem_new(source, &dummy_toks, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
+    s_sem_analyze(&ctx);
+
+    let cg: CBackend = cg_new();
+    let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
+    return output;
+}

@@ -1,0 +1,33 @@
+import "std";
+import "ast";
+import "manifest";
+
+pub fn cmd_run(project_dir: string) -> i32 {
+    let mut mf_path = sb_new();
+    sb_append(&mf_path, project_dir);
+    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_byte(&mf_path, 0);
+    let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
+
+    let strs: Arena = arena_new(65536);
+    let manifest = manifest_load(mf_str, &strs);
+    if manifest.name_off == 0 {
+        print_errln("Error: missing 'name' field in [project]");
+        return 1;
+    }
+    let proj_name = str_read(&strs, manifest.name_off);
+
+    let mut exe_path = sb_new();
+    sb_append(&exe_path, project_dir);
+    sb_append(&exe_path, "\\build\\");
+    sb_append(&exe_path, proj_name);
+    sb_append(&exe_path, ".exe");
+    sb_append_byte(&exe_path, 0);
+    let exe_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
+
+    let mut run_cmd = sb_new();
+    sb_append(&run_cmd, exe_str);
+    sb_append_byte(&run_cmd, 0);
+    let run_line = string{ ptr = sb_get_ptr(&run_cmd), len = sb_get_len(&run_cmd) };
+    return system(run_line.ptr);
+}

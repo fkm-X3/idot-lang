@@ -1,0 +1,103 @@
+import "std";
+import "util";
+import "ast";
+import "manifest";
+import "compile";
+
+pub fn cmd_build(project_dir: string) -> i32 {
+    let mut mf_path = sb_new();
+    sb_append(&mf_path, project_dir);
+    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_byte(&mf_path, 0);
+    let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
+
+    if file_exists(mf_str) == 0 {
+        print_err("Error: no matrix.toml found in '");
+        print_err(project_dir);
+        print_errln("'");
+        return 1;
+    }
+
+    let strs: Arena = arena_new(65536);
+    let manifest = manifest_load(mf_str, &strs);
+    if manifest.name_off == 0 {
+        print_errln("Error: missing 'name' field in [project]");
+        return 1;
+    }
+    let proj_name = str_read(&strs, manifest.name_off);
+
+    let mut main_path = sb_new();
+    sb_append(&main_path, project_dir);
+    sb_append(&main_path, "\\src\\main.ido");
+    sb_append_byte(&main_path, 0);
+    let main_str = string{ ptr = sb_get_ptr(&main_path), len = sb_get_len(&main_path) - 1 };
+    if file_exists(main_str) == 0 {
+        print_errln("Error: no src/main.ido found in project");
+        return 1;
+    }
+
+    let mut build_dir = sb_new();
+    sb_append(&build_dir, project_dir);
+    sb_append(&build_dir, "\\build");
+    sb_append_byte(&build_dir, 0);
+    let build_str = string{ ptr = sb_get_ptr(&build_dir), len = sb_get_len(&build_dir) - 1 };
+
+    let mut mkcmd = sb_new();
+    sb_append(&mkcmd, "if not exist \"");
+    sb_append(&mkcmd, build_str);
+    sb_append(&mkcmd, "\" mkdir \"");
+    sb_append(&mkcmd, build_str);
+    sb_append(&mkcmd, "\"");
+    sb_append_byte(&mkcmd, 0);
+    let mkline = string{ ptr = sb_get_ptr(&mkcmd), len = sb_get_len(&mkcmd) };
+    system(mkline.ptr);
+
+    let mut c_path = sb_new();
+    sb_append(&c_path, build_str);
+    sb_append(&c_path, "\\");
+    sb_append(&c_path, proj_name);
+    sb_append(&c_path, ".c");
+    sb_append_byte(&c_path, 0);
+    let c_path_str = string{ ptr = sb_get_ptr(&c_path), len = sb_get_len(&c_path) - 1 };
+
+    let mut exe_path = sb_new();
+    sb_append(&exe_path, build_str);
+    sb_append(&exe_path, "\\");
+    sb_append(&exe_path, proj_name);
+    sb_append(&exe_path, ".exe");
+    sb_append_byte(&exe_path, 0);
+    let exe_path_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
+
+    let lib_dir: string = "lib";
+    let source = read_entire_file(main_str);
+    if source.len == 0 {
+        print_errln("Error reading source file");
+        return 1;
+    }
+
+    let c_source = compile_file(source, main_str, project_dir, lib_dir);
+    if c_source.len == 0 { return 1; }
+
+    write_str_to_file(c_path_str, c_source);
+
+    let mut cc_cmd = sb_new();
+    sb_append(&cc_cmd, "clang -o \"");
+    sb_append(&cc_cmd, exe_path_str);
+    sb_append(&cc_cmd, "\" \"");
+    sb_append(&cc_cmd, c_path_str);
+    sb_append(&cc_cmd, "\"");
+    sb_append_byte(&cc_cmd, 0);
+    let cc_line = string{ ptr = sb_get_ptr(&cc_cmd), len = sb_get_len(&cc_cmd) };
+    print_err("Compiling ");
+    print_err(proj_name);
+    print_errln("...");
+    let rc = system(cc_line.ptr);
+    if rc != 0 {
+        print_errln("C compilation failed");
+        return 1;
+    }
+
+    print_err("Compiled to ");
+    print_errln(exe_path_str);
+    return 0;
+}

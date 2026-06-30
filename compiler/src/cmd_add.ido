@@ -1,0 +1,189 @@
+import "std";
+import "util";
+
+pub fn cmd_add(project_dir: string, dep_name: string, git_url: string, tag: string) -> i32 {
+    let mut mf_path = sb_new();
+    sb_append(&mf_path, project_dir);
+    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_byte(&mf_path, 0);
+    let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
+
+    let content = read_entire_file(mf_str);
+    if content.len == 0 {
+        print_errln("Error reading matrix.toml");
+        return 1;
+    }
+
+    let mut needle = sb_new();
+    sb_append(&needle, dep_name);
+    sb_append(&needle, " = ");
+    sb_append_byte(&needle, 0);
+    let needle_str = string{ ptr = sb_get_ptr(&needle), len = sb_get_len(&needle) - 1 };
+
+    if str_contains(content, needle_str) != 0 {
+        print_err("Dependency '");
+        print_err(dep_name);
+        print_errln("' already exists in matrix.toml");
+        return 1;
+    }
+
+    let mut dep_line = sb_new();
+    sb_append(&dep_line, dep_name);
+    if git_url.len > 0 {
+        sb_append(&dep_line, " = { git = \"");
+        sb_append(&dep_line, git_url);
+        sb_append(&dep_line, "\"");
+        if tag.len > 0 {
+            sb_append(&dep_line, ", tag = \"");
+            sb_append(&dep_line, tag);
+            sb_append(&dep_line, "\"");
+        }
+        sb_append(&dep_line, " }\n");
+    } else {
+        sb_append(&dep_line, " = {}\n");
+    }
+    sb_append_byte(&dep_line, 0);
+    let dep_line_str = string{ ptr = sb_get_ptr(&dep_line), len = sb_get_len(&dep_line) - 1 };
+
+    let deps_header: string = "[dependencies]";
+    let mut insert_pos: i64 = -1;
+    let mut i: i64 = 0;
+    while i <= content.len - deps_header.len {
+        let mut matched: i32 = 1;
+        let mut j: i64 = 0;
+        while j < deps_header.len {
+            if content.ptr[i + j] != deps_header.ptr[j] { matched = 0; break; }
+            j = j + 1;
+        }
+        if matched != 0 {
+            insert_pos = i + deps_header.len;
+            while insert_pos < content.len && content.ptr[insert_pos] != 10 && content.ptr[insert_pos] != 13 {
+                insert_pos = insert_pos + 1;
+            }
+            if insert_pos < content.len { insert_pos = insert_pos + 1; }
+            break;
+        }
+        i = i + 1;
+    }
+
+    let mut new_content = sb_new();
+    if insert_pos >= 0 {
+        let mut ci: i64 = 0;
+        while ci < insert_pos {
+            if ci < content.len { sb_append_byte(&new_content, content.ptr[ci]); }
+            ci = ci + 1;
+        }
+        sb_append(&new_content, dep_line_str);
+        let mut ci2: i64 = insert_pos;
+        while ci2 < content.len {
+            sb_append_byte(&new_content, content.ptr[ci2]);
+            ci2 = ci2 + 1;
+        }
+    } else {
+        sb_append(&new_content, content);
+        sb_append(&new_content, "\n[dependencies]\n");
+        sb_append(&new_content, dep_line_str);
+    }
+    sb_append_byte(&new_content, 0);
+    let final_content = string{ ptr = sb_get_ptr(&new_content), len = sb_get_len(&new_content) - 1 };
+    write_str_to_file(mf_str, final_content);
+
+    print("Added dependency '");
+    print_err(dep_name);
+    print_errln("'");
+    return 0;
+}
+
+pub fn cmd_remove(project_dir: string, name: string) -> i32 {
+    let mut mf_path = sb_new();
+    sb_append(&mf_path, project_dir);
+    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_byte(&mf_path, 0);
+    let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
+
+    let content = read_entire_file(mf_str);
+    if content.len == 0 {
+        print_errln("Error reading matrix.toml");
+        return 1;
+    }
+
+    let mut new_content = sb_new();
+    let mut removed: i32 = 0;
+    let mut in_deps: i32 = 0;
+    let mut line_start: i64 = 0;
+    let deps_header: string = "[dependencies]";
+    let mut i: i64 = 0;
+
+    while i <= content.len {
+        if i == content.len || content.ptr[i] == 10 || content.ptr[i] == 13 {
+            let line = string{ ptr = content.ptr + line_start, len = i - line_start };
+
+            if line.len >= deps_header.len {
+                let mut is_deps: i32 = 1;
+                let mut j: i64 = 0;
+                while j < deps_header.len {
+                    if line.ptr[j] != deps_header.ptr[j] { is_deps = 0; break; }
+                    j = j + 1;
+                }
+                if is_deps { in_deps = 1; }
+            }
+
+            let mut skip: i32 = 0;
+            if in_deps != 0 && line.len > 0 && line.ptr[0] != 91 {
+                let mut eq_pos: i64 = -1;
+                let mut j: i64 = 0;
+                while j < line.len {
+                    if line.ptr[j] == 61 { eq_pos = j; break; }
+                    j = j + 1;
+                }
+                if eq_pos > 0 {
+                    let mut de = eq_pos;
+                    while de > 0 && is_ws(line.ptr[de - 1]) { de = de - 1; }
+                    let dep_name = string{ ptr = line.ptr, len = de };
+                    if str_eq(dep_name, name) != 0 { skip = 1; removed = 1; }
+                }
+            }
+
+            if line.len >= deps_header.len {
+                let mut is_deps2: i32 = 1;
+                let mut j: i64 = 0;
+                while j < deps_header.len {
+                    if line.ptr[j] != deps_header.ptr[j] { is_deps2 = 0; break; }
+                    j = j + 1;
+                }
+                if is_deps2 == 0 && line.len > 0 && line.ptr[0] == 91 && in_deps != 0 { in_deps = 0; }
+            } else if line.len > 0 && line.ptr[0] == 91 && in_deps != 0 {
+                in_deps = 0;
+            }
+
+            if skip == 0 {
+                let mut j: i64 = line_start;
+                while j <= i {
+                    if j < content.len { sb_append_byte(&new_content, content.ptr[j]); }
+                    j = j + 1;
+                }
+            }
+
+            while i < content.len && (content.ptr[i] == 10 || content.ptr[i] == 13) { i = i + 1; }
+            line_start = i;
+        } else {
+            i = i + 1;
+        }
+    }
+
+    if removed == 0 {
+        print_err("Dependency '");
+        print_err(name);
+        print_errln("' not found in matrix.toml");
+        return 1;
+    }
+
+    sb_append_byte(&new_content, 0);
+    let final_content = string{ ptr = sb_get_ptr(&new_content), len = sb_get_len(&new_content) - 1 };
+    write_str_to_file(mf_str, final_content);
+
+    print("Removed dependency '");
+    print_err(name);
+    print_errln("'");
+    return 0;
+}

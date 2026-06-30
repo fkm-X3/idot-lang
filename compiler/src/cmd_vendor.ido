@@ -1,0 +1,88 @@
+import "std";
+import "util";
+import "ast";
+import "manifest";
+
+pub fn cmd_vendor(project_dir: string) -> i32 {
+    let mut mf_path = sb_new();
+    sb_append(&mf_path, project_dir);
+    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_byte(&mf_path, 0);
+    let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
+
+    if file_exists(mf_str) == 0 {
+        print_errln("Error: no matrix.toml found");
+        return 1;
+    }
+
+    let strs: Arena = arena_new(65536);
+    let manifest = manifest_load(mf_str, &strs);
+    let dep_count_val = dep_count(&manifest);
+
+    if dep_count_val == 0 {
+        print_errln("No dependencies to vendor");
+        return 0;
+    }
+
+    let mut mkcmd = sb_new();
+    sb_append(&mkcmd, "if not exist \"");
+    sb_append(&mkcmd, project_dir);
+    sb_append(&mkcmd, "\\vendor\" mkdir \"");
+    sb_append(&mkcmd, project_dir);
+    sb_append(&mkcmd, "\\vendor\"");
+    sb_append_byte(&mkcmd, 0);
+    let mkcmd_line = string{ ptr = sb_get_ptr(&mkcmd), len = sb_get_len(&mkcmd) };
+    system(mkcmd_line.ptr);
+
+    let mut ei: i64 = 0;
+    while ei < dep_count_val {
+        let mut entry: DepEntry = DepEntry{ name_off = 0, git_off = 0, tag_off = 0, branch_off = 0 };
+        dep_get(&manifest, ei, &entry);
+
+        let dep_name = str_read(&strs, entry.name_off);
+        if entry.git_off != 0 {
+            let git_url = str_read(&strs, entry.git_off);
+            let mut target_path = sb_new();
+            sb_append(&target_path, project_dir);
+            sb_append(&target_path, "\\vendor\\");
+            sb_append(&target_path, dep_name);
+            sb_append_byte(&target_path, 0);
+            let target_str = string{ ptr = sb_get_ptr(&target_path), len = sb_get_len(&target_path) - 1 };
+
+            print_err("Vendoring ");
+            print_err(dep_name);
+            print_errln("...");
+
+            let mut git_cmd = sb_new();
+            sb_append(&git_cmd, "git clone --depth 1 ");
+            if entry.tag_off != 0 {
+                sb_append(&git_cmd, "--branch ");
+                sb_append(&git_cmd, str_read(&strs, entry.tag_off));
+                sb_append(&git_cmd, " ");
+            } else if entry.branch_off != 0 {
+                sb_append(&git_cmd, "--branch ");
+                sb_append(&git_cmd, str_read(&strs, entry.branch_off));
+                sb_append(&git_cmd, " ");
+            }
+            sb_append(&git_cmd, "\"");
+            sb_append(&git_cmd, git_url);
+            sb_append(&git_cmd, "\" \"");
+            sb_append(&git_cmd, target_str);
+            sb_append(&git_cmd, "\"");
+            sb_append_byte(&git_cmd, 0);
+            let git_cmd_str = string{ ptr = sb_get_ptr(&git_cmd), len = sb_get_len(&git_cmd) };
+            let rc = system(git_cmd_str.ptr);
+            if rc != 0 {
+                print_err("Failed to vendor ");
+                print_errln(dep_name);
+            }
+        } else {
+            print_err("Skipping ");
+            print_err(dep_name);
+            print_errln(" (no git URL)");
+        }
+        ei = ei + 1;
+    }
+
+    return 0;
+}
