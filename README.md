@@ -6,7 +6,7 @@ toward self-hosting.
 
 <!-- LANG_BAR_START -->
 <p align="center">
-  <img src="assets/lang-bar.svg" alt="Language breakdown">
+  <img src="https://raw.githubusercontent.com/fkm-X3/idot-lang/refs/heads/assets/assets/lang-bar.svg" alt="Language breakdown">
 </p>
 <!-- LANG_BAR_END -->
 
