@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-README="README.md"
+SVG="assets/lang-bar.svg"
 
 count_loc() {
   local total=0
@@ -38,37 +38,17 @@ if [ "$diff" -ne 0 ]; then
   fi
 fi
 
-cat > /tmp/lang-bar.html <<EOF
-### Project Language Breakdown
+idot_w=$((idot_pct * 6))
+rust_w=$((rust_pct * 6))
 
-<table>
-  <tr>
-    <td width="${idot_pct}%" bgcolor="#8510d8">&nbsp;</td>
-    <td width="${rust_pct}%" bgcolor="#dea584">&nbsp;</td>
-  </tr>
-  <tr>
-    <td align="center"><b>Idot</b> ${idot_pct}%</td>
-    <td align="center"><b>Rust</b> ${rust_pct}%</td>
-  </tr>
-</table>
-
-<!-- LANG_BAR_END -->
+cat > "$SVG" <<EOF
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="32" viewBox="0 0 600 32">
+  <rect x="0" y="0" width="600" height="32" rx="4" fill="#e0e0e0"/>
+  <rect x="0" y="0" width="${idot_w}" height="32" rx="4" fill="#8510d8"/>
+  <rect x="${idot_w}" y="0" width="${rust_w}" height="32" rx="4" fill="#dea584"/>
+  <text x="$((idot_w / 2))" y="21" text-anchor="middle" font-family="sans-serif" font-size="12" fill="white" font-weight="bold">Idot ${idot_pct}%</text>
+  <text x="$((idot_w + rust_w / 2))" y="21" text-anchor="middle" font-family="sans-serif" font-size="12" fill="orange" font-weight="bold">Rust ${rust_pct}%</text>
+</svg>
 EOF
 
-awk '
-/<!-- LANG_BAR_START -->/ {
-  print
-  while ((getline line < "/tmp/lang-bar.html") > 0) print line
-  skip = 1
-  next
-}
-/<!-- LANG_BAR_END -->/ {
-  skip = 0
-  next
-}
-!skip { print }
-' "$README" > "${README}.tmp" && mv "${README}.tmp" "$README"
-
-rm -f /tmp/lang-bar.html
-
-echo "Updated language breakdown: Idot ${idot_pct}%, Rust ${rust_pct}%"
+echo "Updated $SVG: Idot ${idot_pct}%, Rust ${rust_pct}%"

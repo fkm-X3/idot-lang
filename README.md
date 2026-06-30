@@ -5,19 +5,9 @@ leverages the system C compiler for code generation. The project is building
 toward self-hosting.
 
 <!-- LANG_BAR_START -->
-### Project Language Breakdown
-
-<table>
-  <tr>
-    <td width="62%" bgcolor="#8510d8">&nbsp;</td>
-    <td width="38%" bgcolor="#dea584">&nbsp;</td>
-  </tr>
-  <tr>
-    <td align="center"><b>Idot</b> 62%</td>
-    <td align="center"><b>Rust</b> 38%</td>
-  </tr>
-</table>
-
+<p align="center">
+  <img src="assets/lang-bar.svg" alt="Language breakdown">
+</p>
 <!-- LANG_BAR_END -->
 
 ```bash
