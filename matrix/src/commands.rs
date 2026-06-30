@@ -85,15 +85,15 @@ pub fn cmd_build(project_dir: &Path) {
         });
 
     let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
-    let status = std::process::Command::new(cc)
-        .arg("-o")
-        .arg(&exe_path)
-        .arg(&c_path)
-        .status()
-        .unwrap_or_else(|_| {
-            eprintln!("Failed to run '{}'. Is a C compiler installed?", cc);
-            std::process::exit(1);
-        });
+    let mut cmd = std::process::Command::new(cc);
+    cmd.arg("-o").arg(&exe_path).arg(&c_path);
+    if cfg!(target_os = "windows") {
+        cmd.arg("-Wl,/subsystem:console");
+    }
+    let status = cmd.status().unwrap_or_else(|_| {
+        eprintln!("Failed to run '{}'. Is a C compiler installed?", cc);
+        std::process::exit(1);
+    });
 
     if !status.success() {
         eprintln!("C compilation failed");
@@ -136,7 +136,7 @@ pub fn cmd_test(project_dir: &Path, self_hosted: bool) {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("ido") {
                     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if name.ends_with("_test") {
+                    if (name.ends_with("_test") || name.starts_with("test_")) && name != "cmd_test" {
                         test_files.push(path);
                     }
                 }
@@ -231,12 +231,12 @@ fn run_tests_self_hosted(project_dir: &Path, test_files: &[PathBuf]) {
         );
 
         let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
-        let cc_status = std::process::Command::new(cc)
-            .arg("-o")
-            .arg(&exe_path)
-            .arg(&c_path)
-            .status()
-            .expect("Failed to compile C output");
+        let mut cc_cmd = std::process::Command::new(cc);
+        cc_cmd.arg("-o").arg(&exe_path).arg(&c_path);
+        if cfg!(target_os = "windows") {
+            cc_cmd.arg("/subsystem:console");
+        }
+        let cc_status = cc_cmd.status().expect("Failed to compile C output");
 
         if !cc_status.success() {
             println!("CC FAILED");
@@ -284,12 +284,12 @@ fn run_tests_bootstrap(project_dir: &Path, test_files: &[PathBuf], import_dirs: 
         fs::write(&c_path, &c_source).expect("Failed to write C file");
 
         let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
-        let status = std::process::Command::new(cc)
-            .arg("-o")
-            .arg(&exe_path)
-            .arg(&c_path)
-            .status()
-            .expect("Failed to compile C output");
+        let mut cmd = std::process::Command::new(cc);
+        cmd.arg("-o").arg(&exe_path).arg(&c_path);
+        if cfg!(target_os = "windows") {
+            cmd.arg("-Wl,/subsystem:console");
+        }
+        let status = cmd.status().expect("Failed to compile C output");
 
         if !status.success() {
             println!("CC FAILED");

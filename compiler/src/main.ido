@@ -170,6 +170,7 @@ pub fn main() -> i32 {
     sb_append(&cmd_line_sb, exe_path);
     sb_append(&cmd_line_sb, " ");
     sb_append(&cmd_line_sb, c_path);
+    sb_append(&cmd_line_sb, " -Wl,/subsystem:console");
     sb_append_byte(&cmd_line_sb, 0);
 
     let cmd_line = string{ ptr = sb_get_ptr(&cmd_line_sb), len = sb_get_len(&cmd_line_sb) };

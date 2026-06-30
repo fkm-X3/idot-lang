@@ -85,7 +85,7 @@ pub fn cmd_build(project_dir: string) -> i32 {
     sb_append(&cc_cmd, exe_path_str);
     sb_append(&cc_cmd, "\" \"");
     sb_append(&cc_cmd, c_path_str);
-    sb_append(&cc_cmd, "\"");
+    sb_append(&cc_cmd, "\" -Wl,/subsystem:console");
     sb_append_byte(&cc_cmd, 0);
     let cc_line = string{ ptr = sb_get_ptr(&cc_cmd), len = sb_get_len(&cc_cmd) };
     print_err("Compiling ");

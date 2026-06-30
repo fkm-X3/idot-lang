@@ -62,15 +62,15 @@ fn do_compile(input_path_str: &str, emit_c: bool) {
     }
 
     let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
-    let status = Command::new(cc)
-        .arg("-o")
-        .arg(&exe_path)
-        .arg(&c_path)
-        .status()
-        .unwrap_or_else(|_| {
-            eprintln!("Failed to run '{}'. Is a C compiler installed?", cc);
-            std::process::exit(1);
-        });
+    let mut cmd = Command::new(cc);
+    cmd.arg("-o").arg(&exe_path).arg(&c_path);
+    if cfg!(target_os = "windows") {
+        cmd.arg("-Wl,/subsystem:console");
+    }
+    let status = cmd.status().unwrap_or_else(|_| {
+        eprintln!("Failed to run '{}'. Is a C compiler installed?", cc);
+        std::process::exit(1);
+    });
 
     if !status.success() {
         eprintln!("C compilation failed");
@@ -103,12 +103,12 @@ fn do_run(input_path_str: &str) {
     fs::write(&c_path, &c_source).expect("Failed to write C file");
 
     let cc = if cfg!(target_os = "windows") { "clang" } else { "cc" };
-    let status = Command::new(cc)
-        .arg("-o")
-        .arg(&exe_path)
-        .arg(&c_path)
-        .status()
-        .expect("Failed to compile C output");
+    let mut cmd = Command::new(cc);
+    cmd.arg("-o").arg(&exe_path).arg(&c_path);
+    if cfg!(target_os = "windows") {
+        cmd.arg("-Wl,/subsystem:console");
+    }
+    let status = cmd.status().expect("Failed to compile C output");
 
     if !status.success() {
         eprintln!("C compilation failed");

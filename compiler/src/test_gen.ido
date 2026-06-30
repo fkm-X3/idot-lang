@@ -1,11 +1,457 @@
 import "std";
+import "util";
+import "ast";
 import "codegen";
+import "compile";
+
+fn ensure_build_dir() -> void {
+    let mkcmd: string = "mkdir build\\ 2>nul";
+    system(mkcmd.ptr);
+}
+
+fn compile_and_run(src: string, stem: string, expected_exit: i32) -> i32 {
+    ensure_build_dir();
+
+    let src_path = sb_new();
+    sb_append(&src_path, "build\\");
+    sb_append(&src_path, stem);
+    sb_append(&src_path, ".ido");
+    sb_append_byte(&src_path, 0);
+    let src_path_str = string{ ptr = sb_get_ptr(&src_path), len = sb_get_len(&src_path) - 1 };
+
+    write_str_to_file(src_path_str, src);
+
+    let c_source = compile_file(src, src_path_str, ".", "lib");
+    if c_source.len == 0 {
+        print_err("COMPILE FAILED: ");
+        print_errln(stem);
+        return 1;
+    }
+
+    let c_path = sb_new();
+    sb_append(&c_path, "build\\");
+    sb_append(&c_path, stem);
+    sb_append(&c_path, ".c");
+    sb_append_byte(&c_path, 0);
+    let c_path_str = string{ ptr = sb_get_ptr(&c_path), len = sb_get_len(&c_path) - 1 };
+    write_str_to_file(c_path_str, c_source);
+
+    let exe_path = sb_new();
+    sb_append(&exe_path, "build\\");
+    sb_append(&exe_path, stem);
+    sb_append(&exe_path, ".exe");
+    sb_append_byte(&exe_path, 0);
+    let exe_path_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
+
+    let cc_cmd = sb_new();
+    sb_append(&cc_cmd, "clang -o \"");
+    sb_append(&cc_cmd, exe_path_str);
+    sb_append(&cc_cmd, "\" \"");
+    sb_append(&cc_cmd, c_path_str);
+    sb_append(&cc_cmd, "\" -Wl,/subsystem:console");
+    sb_append_byte(&cc_cmd, 0);
+    let cc_line = string{ ptr = sb_get_ptr(&cc_cmd), len = sb_get_len(&cc_cmd) };
+    let rc = system(cc_line.ptr);
+    if rc != 0 {
+        print_err("CC FAILED: ");
+        print_errln(stem);
+        return 2;
+    }
+
+    let run_cmd = sb_new();
+    sb_append(&run_cmd, "\"");
+    sb_append(&run_cmd, exe_path_str);
+    sb_append(&run_cmd, "\"");
+    sb_append_byte(&run_cmd, 0);
+    let run_line = string{ ptr = sb_get_ptr(&run_cmd), len = sb_get_len(&run_cmd) };
+    let exit_code = system(run_line.ptr);
+
+    if exit_code != expected_exit {
+        print_err("EXIT CODE ");
+        print_err(stem);
+        print_err(": got ");
+        print_err(cg_int_to_str_i64(exit_code));
+        print_err(" expected ");
+        print_errln(cg_int_to_str_i64(expected_exit));
+        return 3;
+    }
+
+    return 0;
+}
+
+fn compile_check_c(src: string, stem: string, expected: string) -> i32 {
+    ensure_build_dir();
+
+    let src_path = sb_new();
+    sb_append(&src_path, "build/");
+    sb_append(&src_path, stem);
+    sb_append(&src_path, ".ido");
+    sb_append_byte(&src_path, 0);
+    let src_path_str = string{ ptr = sb_get_ptr(&src_path), len = sb_get_len(&src_path) - 1 };
+
+    write_str_to_file(src_path_str, src);
+
+    let c_source = compile_file(src, src_path_str, ".", "lib");
+    if c_source.len == 0 {
+        print_err("COMPILE FAILED: ");
+        print_errln(stem);
+        return 1;
+    }
+
+    if str_contains(c_source, expected) == 0 {
+        print_err("PATTERN MISSING in ");
+        print_err(stem);
+        print_err(": ");
+        print_errln(expected);
+        return 2;
+    }
+
+    return 0;
+}
+
+// ============== DIRECT CODEGEN API TESTS ==============
+
+fn test_cg_new_and_line() -> i32 {
+    let cg = cg_new();
+    cg_emit_line(&cg, "int x = 42;");
+    let out = string{ ptr = sb_get_ptr(&cg.out), len = sb_get_len(&cg.out) };
+    if str_contains(out, "int x = 42;") == 0 { print_errln("FAIL cg_new_and_line"); return 1; }
+    return 0;
+}
+
+fn test_cg_emit_i32() -> i32 {
+    let cg = cg_new();
+    cg_emit_i32(&cg, 12345);
+    let out = string{ ptr = sb_get_ptr(&cg.out), len = sb_get_len(&cg.out) };
+    if str_contains(out, "12345") == 0 { print_errln("FAIL cg_emit_i32"); return 1; }
+    return 0;
+}
+
+fn test_cg_emit_i64() -> i32 {
+    let cg = cg_new();
+    cg_emit_i64(&cg, 9999999999);
+    let out = string{ ptr = sb_get_ptr(&cg.out), len = sb_get_len(&cg.out) };
+    if str_contains(out, "9999999999") == 0 { print_errln("FAIL cg_emit_i64"); return 1; }
+    return 0;
+}
+
+fn test_cg_emit_str() -> i32 {
+    let cg = cg_new();
+    cg_emit_str(&cg, "hello_world");
+    let out = string{ ptr = sb_get_ptr(&cg.out), len = sb_get_len(&cg.out) };
+    if str_contains(out, "hello_world") == 0 { print_errln("FAIL cg_emit_str"); return 1; }
+    return 0;
+}
+
+fn test_cg_emit_char() -> i32 {
+    let cg = cg_new();
+    cg_emit_char(&cg, 65);
+    let out = string{ ptr = sb_get_ptr(&cg.out), len = sb_get_len(&cg.out) };
+    if out.len != 1 || out.ptr[0] != 65 { print_errln("FAIL cg_emit_char"); return 1; }
+    return 0;
+}
+
+fn test_cg_int_to_str() -> i32 {
+    let s0 = cg_int_to_str(0);
+    if s0.len != 1 || s0.ptr[0] != 48 { print_errln("FAIL cg_int_to_str zero"); return 1; }
+    let s1 = cg_int_to_str(42);
+    if s1.len != 2 || s1.ptr[0] != 52 || s1.ptr[1] != 50 { print_errln("FAIL cg_int_to_str 42"); return 2; }
+    let s2 = cg_int_to_str(9999);
+    if s2.len != 4 { print_errln("FAIL cg_int_to_str 9999 len"); return 3; }
+    if s2.ptr[0] != 57 || s2.ptr[1] != 57 || s2.ptr[2] != 57 || s2.ptr[3] != 57 { print_errln("FAIL cg_int_to_str 9999 val"); return 4; }
+    return 0;
+}
+
+fn test_cg_indent() -> i32 {
+    let cg = cg_new();
+    cg.indent = 2;
+    cg_emit_line(&cg, "test;");
+    let out = string{ ptr = sb_get_ptr(&cg.out), len = sb_get_len(&cg.out) };
+    let expect: string = "        test;\n";
+    if str_eq(out, expect) == 0 { print_errln("FAIL indent"); return 1; }
+    return 0;
+}
+
+fn test_sb_ops() -> i32 {
+    let sb = sb_new();
+    if sb_get_len(&sb) != 0 { print_errln("FAIL sb_new len"); return 1; }
+    sb_append(&sb, "abc");
+    if sb_get_len(&sb) != 3 { print_errln("FAIL sb_append len"); return 2; }
+    let p = sb_get_ptr(&sb);
+    if p[0] != 97 || p[1] != 98 || p[2] != 99 { print_errln("FAIL sb content"); return 3; }
+    sb_append_byte(&sb, 68);
+    if sb_get_len(&sb) != 4 { print_errln("FAIL sb_append_byte len"); return 4; }
+    if p[3] != 68 { print_errln("FAIL sb_append_byte val"); return 5; }
+    return 0;
+}
+
+fn test_arena_ops() -> i32 {
+    let arena: Arena = arena_new(128);
+    if arena.len != 0 { print_errln("FAIL arena len"); return 1; }
+    let off = arena_alloc(&arena, 16);
+    if off != 0 { print_errln("FAIL arena alloc off"); return 2; }
+    if arena.len != 16 { print_errln("FAIL arena alloc len"); return 3; }
+    arena_write_i64(&arena, 0, 12345);
+    let val = arena_read_i64(&arena, 0);
+    if val != 12345 { print_errln("FAIL arena rw i64"); return 4; }
+    arena_write_i32(&arena, 8, 6789);
+    let val32 = arena_read_i32(&arena, 8);
+    if val32 != 6789 { print_errln("FAIL arena rw i32"); return 5; }
+    return 0;
+}
+
+fn test_type_ops() -> i32 {
+    let types: Arena = arena_new(256);
+    let strs: Arena = arena_new(256);
+    let name_off = str_arena_append(&strs, "i32");
+    let tid = type_store(&types, 1, name_off, 0);
+    if type_tag(&types, tid) != 1 { print_errln("FAIL type tag"); return 1; }
+    if type_data1(&types, tid) != name_off { print_errln("FAIL type data1"); return 2; }
+    return 0;
+}
+
+fn test_str_arena() -> i32 {
+    let strs: Arena = arena_new(256);
+    let off = str_arena_append(&strs, "hello");
+    let s = str_read(&strs, off);
+    if s.len != 5 { print_errln("FAIL str_arena len"); return 1; }
+    if s.ptr[0] != 104 { print_errln("FAIL str_arena content"); return 2; }
+    return 0;
+}
+
+fn test_cg_is_builtin() -> i32 {
+    if cg_is_builtin_type_name("i32") == 0 { print_errln("FAIL is_builtin i32"); return 1; }
+    if cg_is_builtin_type_name("string") == 0 { print_errln("FAIL is_builtin string"); return 2; }
+    if cg_is_builtin_type_name("void") == 0 { print_errln("FAIL is_builtin void"); return 3; }
+    if cg_is_builtin_type_name("MyStruct") != 0 { print_errln("FAIL is_builtin MyStruct"); return 4; }
+    return 0;
+}
+
+fn test_decl_is_generic() -> i32 {
+    if decl_is_generic(0) != 0 { print_errln("FAIL decl_is_generic false"); return 1; }
+    if decl_is_generic(256) == 0 { print_errln("FAIL decl_is_generic true"); return 2; }
+    return 0;
+}
+
+// ============== EXPRESSION CODEGEN TESTS ==============
+
+fn test_add() -> i32 { return compile_and_run("fn main() -> i32 { return 10 + 20; }", "t_add", 30); }
+fn test_sub() -> i32 { return compile_and_run("fn main() -> i32 { return 100 - 30; }", "t_sub", 70); }
+fn test_mul() -> i32 { return compile_and_run("fn main() -> i32 { return 7 * 6; }", "t_mul", 42); }
+fn test_div() -> i32 { return compile_and_run("fn main() -> i32 { return 84 / 2; }", "t_div", 42); }
+fn test_mod() -> i32 { return compile_and_run("fn main() -> i32 { return 100 % 30; }", "t_mod", 10); }
+fn test_precedence() -> i32 { return compile_and_run("fn main() -> i32 { return 2 + 3 * 4; }", "t_prec", 14); }
+fn test_parens() -> i32 { return compile_and_run("fn main() -> i32 { return (1 + 2) * (3 + 4) - 5; }", "t_parens", 16); }
+fn test_unary_neg() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 10; let y: i32 = -x; return y + 20; }", "t_uneg", 10); }
+fn test_unary_not() -> i32 { return compile_and_run("fn main() -> i32 { let x: bool = true; if !x { return 0; } return 1; }", "t_unot", 1); }
+
+fn test_cmp_eq() -> i32 { return compile_and_run("fn main() -> i32 { if 5 == 5 { return 1; } return 0; }", "t_cmpeq", 1); }
+fn test_cmp_neq() -> i32 { return compile_and_run("fn main() -> i32 { if 5 != 6 { return 2; } return 0; }", "t_cmpne", 2); }
+fn test_cmp_lt() -> i32 { return compile_and_run("fn main() -> i32 { if 3 < 5 { return 3; } return 0; }", "t_cmplt", 3); }
+fn test_cmp_gt() -> i32 { return compile_and_run("fn main() -> i32 { if 7 > 5 { return 4; } return 0; }", "t_cmpgt", 4); }
+fn test_cmp_le() -> i32 { return compile_and_run("fn main() -> i32 { if 5 <= 5 { return 5; } return 0; }", "t_cmple", 5); }
+fn test_cmp_ge() -> i32 { return compile_and_run("fn main() -> i32 { if 5 >= 5 { return 6; } return 0; }", "t_cmpge", 6); }
+fn test_and() -> i32 { return compile_and_run("fn main() -> i32 { if 1 == 1 && 2 == 2 { return 1; } return 0; }", "t_and", 1); }
+fn test_or() -> i32 { return compile_and_run("fn main() -> i32 { if 1 == 2 || 2 == 2 { return 1; } return 0; }", "t_or", 1); }
+fn test_bool_and() -> i32 { return compile_and_run("fn main() -> i32 { let a: bool = true; let b: bool = true; if a && b { return 1; } return 0; }", "t_band", 1); }
+fn test_bitwise_ops() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 12; let y: i32 = 7; return (x & y) + (x | y) + (x ^ y); }", "t_bitw", 30); }
+fn test_shift_ops() -> i32 { return compile_and_run("fn main() -> i32 { return (1 << 3) + (16 >> 2); }", "t_shft", 12); }
+
+// ============== STATEMENT CODEGEN TESTS ==============
+
+fn test_if_true() -> i32 { return compile_and_run("fn main() -> i32 { if 1 == 1 { return 42; } else { return 0; } }", "t_ift", 42); }
+fn test_if_false() -> i32 { return compile_and_run("fn main() -> i32 { if 1 == 2 { return 0; } else { return 99; } }", "t_iff", 99); }
+fn test_if_no_else() -> i32 { return compile_and_run("fn main() -> i32 { if 1 == 2 { return 0; } return 77; }", "t_ifne", 77); }
+fn test_nested_if() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 5; if x > 0 { if x > 3 { return 10; } else { return 0; } } return 0; }", "t_nif", 10); }
+fn test_while_loop() -> i32 { return compile_and_run("fn main() -> i32 { let mut i: i32 = 0; while i < 5 { i = i + 1; } return i; }", "t_whil", 5); }
+fn test_while_sum() -> i32 { return compile_and_run("fn main() -> i32 { let mut s: i32 = 0; let mut i: i32 = 0; while i < 10 { s = s + i; i = i + 1; } return s; }", "t_wsum", 45); }
+fn test_while_break() -> i32 { return compile_and_run("fn main() -> i32 { let mut i: i32 = 0; while 1 == 1 { if i >= 3 { break; } i = i + 1; } return i; }", "t_wbrk", 3); }
+fn test_defer_basic() -> i32 { return compile_and_run("fn main() -> i32 { let mut x: i32 = 10; defer { x = x + 1; } x = x + 5; return x; }", "t_dfr", 16); }
+fn test_early_return() -> i32 { return compile_and_run("fn main() -> i32 { return 42; let x: i32 = 0; return x; }", "t_eret", 42); }
+fn test_multi_return_fn() -> i32 { return compile_and_run("fn check(x: i32) -> i32 { if x > 0 { return 1; } if x < 0 { return 2; } return 0; } fn main() -> i32 { return check(5) + check(0); }", "t_mret", 1); }
+fn test_nested_blocks() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 1; { let y: i32 = 2; x = x + y; } return x; }", "t_nblk", 3); }
+fn test_for_in() -> i32 { return compile_and_run("fn main() -> i32 { let mut count: i32 = 0; for c in \"hello\" { count = count + 1; } return count; }", "t_for", 5); }
+fn test_for_in_empty() -> i32 { return compile_and_run("fn main() -> i32 { let mut count: i32 = 0; for c in \"\" { count = count + 1; } return count; }", "t_fore", 0); }
+fn test_match_literal() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 2; match x { 1 => { return 10; }, 2 => { return 20; }, _ => { return 0; }, } return 0; }", "t_mtch", 20); }
+fn test_match_wildcard() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 99; match x { 1 => { return 10; }, 2 => { return 20; }, _ => { return 30; }, } return 0; }", "t_mtw", 30); }
+
+// ============== TYPE CODEGEN TESTS ==============
+
+fn test_bool_type() -> i32 { return compile_and_run("fn main() -> i32 { let b: bool = true; if b { return 1; } return 0; }", "t_bool", 1); }
+fn test_bool_eq() -> i32 { return compile_and_run("fn main() -> i32 { let a: bool = true; let b: bool = true; if a == b { return 1; } return 0; }", "t_beq", 1); }
+fn test_ptr_deref() -> i32 { return compile_and_run("fn main() -> i32 { let x: i32 = 42; let p: *i32 = &x; return *p; }", "t_ptr", 42); }
+fn test_array_index() -> i32 { return compile_and_run("fn main() -> i32 { let arr: [3]i32 = [3]i32{ 10, 20, 30 }; return arr[1]; }", "t_arr", 20); }
+fn test_struct_fields() -> i32 { return compile_and_run("struct Pt { x: i32, y: i32, } fn main() -> i32 { let p = Pt{ x = 10, y = 20 }; return p.x + p.y; }", "t_st", 30); }
+fn test_struct_nested() -> i32 { return compile_and_run("struct Inner { v: i32, } struct Outer { inner: Inner, extra: i32, } fn main() -> i32 { let o = Outer{ inner = Inner{ v = 5 }, extra = 3 }; return o.inner.v + o.extra; }", "t_stn", 8); }
+fn test_str_len() -> i32 { return compile_and_run("fn main() -> i32 { let s: string = \"hi\"; return s.len; }", "t_sl", 2); }
+fn test_float_to_int() -> i32 { return compile_and_run("fn main() -> i32 { let x: f64 = 3.14; let y: i32 = x; return y; }", "t_cast", 3); }
+
+fn test_empty_struct() -> i32 { return compile_check_c("struct Empty { } fn main() -> i32 { return 0; }", "t_empst", "typedef struct Empty"); }
+fn test_enum_type() -> i32 { return compile_check_c("enum Color { Red, Green, Blue } fn main() -> i32 { return 0; }", "t_enum", "typedef enum Color"); }
+fn test_union_type() -> i32 { return compile_check_c("union Data { x: i32, y: f64, } fn main() -> i32 { return 0; }", "t_union", "typedef union Data"); }
+
+// ============== DECL CODEGEN TESTS ==============
+
+fn test_fn_call() -> i32 { return compile_and_run("fn add(a: i32, b: i32) -> i32 { return a + b; } fn main() -> i32 { return add(10, 20); }", "t_fcal", 30); }
+fn test_fn_nested_call() -> i32 { return compile_and_run("fn add(a: i32, b: i32) -> i32 { return a + b; } fn main() -> i32 { return add(add(1, 2), add(3, 4)); }", "t_fnst", 10); }
+fn test_fn_void_return() -> i32 { return compile_and_run("fn nothing() -> void { } fn main() -> i32 { nothing(); return 0; }", "t_efn", 0); }
+fn test_const_global() -> i32 { return compile_and_run("const MY_VAL: i32 = 77; fn main() -> i32 { return MY_VAL; }", "t_cgbl", 77); }
+fn test_var_mutate() -> i32 { return compile_and_run("fn main() -> i32 { let mut x: i32 = 10; x = x + 5; return x; }", "t_vdec", 15); }
+fn test_multiple_vars() -> i32 { return compile_and_run("fn main() -> i32 { let a: i32 = 3; let b: i32 = 4; return a * a + b * b; }", "t_mvar", 25); }
+fn test_comptime_const() -> i32 { return compile_and_run("fn main() -> i32 { const X: i32 = 10; const Y: i32 = 20; return X + Y; }", "t_cp", 30); }
+fn test_fn_params() -> i32 { return compile_and_run("fn mul(a: i32, b: i32, c: i32) -> i32 { return a * b * c; } fn main() -> i32 { return mul(2, 3, 4); }", "t_fpar", 24); }
+
+// ============== IMPORT CODEGEN TESTS ==============
+
+fn test_import_math() -> i32 { return compile_and_run("import \"std/math\"; fn main() -> i32 { return min(10, 20); }", "t_imp", 10); }
+fn test_import_c() -> i32 { return compile_and_run("import \"std/c\"; fn main() -> i32 { let s: string = \"hello\"; return strlen(s.ptr); }", "t_impc", 5); }
+
+// ============== GENERIC CODEGEN TESTS ==============
+
+fn test_generic_fn() -> i32 { return compile_and_run("fn id[T: type](x: T) -> T { return x; } fn main() -> i32 { return id(42); }", "t_gfn", 42); }
+fn test_generic_struct() -> i32 { return compile_and_run("struct Pair[T: type, U: type] { first: T, second: U, } fn main() -> i32 { let p = Pair{ first = 10, second = 20 }; return p.first + p.second; }", "t_gst", 30); }
+fn test_nested_generic() -> i32 { return compile_and_run("struct Pair[T: type, U: type] { first: T, second: U, } fn id[T: type](x: T) -> T { return x; } fn main() -> i32 { let p = Pair{ first = id(5), second = id(6) }; return p.first + p.second; }", "t_ngn", 11); }
+fn test_generic_twice() -> i32 { return compile_and_run("fn id[T: type](x: T) -> T { return x; } fn main() -> i32 { let a: i32 = id(10); let b: i32 = id(20); return a + b; }", "t_gtw", 30); }
+
+// ============== STRING / LITERAL TESTS ==============
+
+fn test_str_literal_len() -> i32 { return compile_and_run("fn main() -> i32 { let s: string = \"abc\"; if s.len == 3 { return 1; } return 0; }", "t_slit", 1); }
+fn test_str_iterate() -> i32 { return compile_and_run("fn main() -> i32 { let s: string = \"no\"; let mut i: i64 = 0; while i < s.len { i = i + 1; } if i == 2 { return 1; } return 0; }", "t_sitr", 1); }
+
+// ============== C OUTPUT PATTERN TESTS ==============
+
+fn test_c_has_main() -> i32 { return compile_check_c("fn main() -> i32 { return 0; }", "t_cout", "int main"); }
+fn test_c_has_headers() -> i32 { return compile_check_c("fn main() -> i32 { return 0; }", "t_chead", "#include <stddef.h>"); }
+fn test_c_has_struct() -> i32 { return compile_check_c("struct Pt { x: i32, y: i32, } fn main() -> i32 { return 0; }", "t_cst", "typedef struct Pt"); }
+fn test_c_has_fn_decl() -> i32 { return compile_check_c("fn add(a: i32, b: i32) -> i32 { return a + b; } fn main() -> i32 { return add(1, 2); }", "t_cfnd", "int32_t add(int32_t a, int32_t b);"); }
+fn test_c_has_if() -> i32 { return compile_check_c("fn main() -> i32 { if 1 == 1 { return 0; } return 1; }", "t_cif", "if"); }
+fn test_c_has_while() -> i32 { return compile_check_c("fn main() -> i32 { let mut i: i32 = 0; while i < 3 { i = i + 1; } return i; }", "t_cwh", "while"); }
+fn test_c_has_return() -> i32 { return compile_check_c("fn main() -> i32 { return 0; }", "t_cret", "return"); }
+fn test_c_has_comment() -> i32 { return compile_check_c("fn main() -> i32 { return 0; }", "t_cgen", "Generated by Idot"); }
 
 pub fn main() -> i32 {
-    let cg = cg_new();
-    cg_emit_line(&cg, "Hello world\n");
-    let out_ptr = sb_get_ptr(&((*cg).out));
-    let out_len = sb_get_len(&((*cg).out));
-    write(1, out_ptr, out_len);
+    let mut failures: i64 = 0;
+    let mut rc: i32 = 0;
+
+    print_errln("MARKER: API tests");
+    // Direct codegen API tests (13)
+    rc = test_cg_new_and_line(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_emit_i32(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_emit_i64(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_emit_str(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_emit_char(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_int_to_str(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_indent(); if rc != 0 { failures = failures + 1; }
+    rc = test_sb_ops(); if rc != 0 { failures = failures + 1; }
+    rc = test_arena_ops(); if rc != 0 { failures = failures + 1; }
+    rc = test_type_ops(); if rc != 0 { failures = failures + 1; }
+    rc = test_str_arena(); if rc != 0 { failures = failures + 1; }
+    rc = test_cg_is_builtin(); if rc != 0 { failures = failures + 1; }
+    rc = test_decl_is_generic(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: expression tests");
+    // Expression codegen tests: binary ops (5)
+    rc = test_add(); if rc != 0 { failures = failures + 1; }
+    rc = test_sub(); if rc != 0 { failures = failures + 1; }
+    rc = test_mul(); if rc != 0 { failures = failures + 1; }
+    rc = test_div(); if rc != 0 { failures = failures + 1; }
+    rc = test_mod(); if rc != 0 { failures = failures + 1; }
+    // Expression: precedence, parens (2)
+    rc = test_precedence(); if rc != 0 { failures = failures + 1; }
+    rc = test_parens(); if rc != 0 { failures = failures + 1; }
+    // Expression: unary (2)
+    rc = test_unary_neg(); if rc != 0 { failures = failures + 1; }
+    rc = test_unary_not(); if rc != 0 { failures = failures + 1; }
+    // Expression: comparisons (6)
+    rc = test_cmp_eq(); if rc != 0 { failures = failures + 1; }
+    rc = test_cmp_neq(); if rc != 0 { failures = failures + 1; }
+    rc = test_cmp_lt(); if rc != 0 { failures = failures + 1; }
+    rc = test_cmp_gt(); if rc != 0 { failures = failures + 1; }
+    rc = test_cmp_le(); if rc != 0 { failures = failures + 1; }
+    rc = test_cmp_ge(); if rc != 0 { failures = failures + 1; }
+    // Expression: logical (3)
+    rc = test_and(); if rc != 0 { failures = failures + 1; }
+    rc = test_or(); if rc != 0 { failures = failures + 1; }
+    rc = test_bool_and(); if rc != 0 { failures = failures + 1; }
+    // Expression: bitwise (2)
+    rc = test_bitwise_ops(); if rc != 0 { failures = failures + 1; }
+    rc = test_shift_ops(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: statement tests");
+    // Statement codegen tests (15)
+    rc = test_if_true(); if rc != 0 { failures = failures + 1; }
+    rc = test_if_false(); if rc != 0 { failures = failures + 1; }
+    rc = test_if_no_else(); if rc != 0 { failures = failures + 1; }
+    rc = test_nested_if(); if rc != 0 { failures = failures + 1; }
+    rc = test_while_loop(); if rc != 0 { failures = failures + 1; }
+    rc = test_while_sum(); if rc != 0 { failures = failures + 1; }
+    rc = test_while_break(); if rc != 0 { failures = failures + 1; }
+    rc = test_defer_basic(); if rc != 0 { failures = failures + 1; }
+    rc = test_early_return(); if rc != 0 { failures = failures + 1; }
+    rc = test_multi_return_fn(); if rc != 0 { failures = failures + 1; }
+    rc = test_nested_blocks(); if rc != 0 { failures = failures + 1; }
+    rc = test_for_in(); if rc != 0 { failures = failures + 1; }
+    rc = test_for_in_empty(); if rc != 0 { failures = failures + 1; }
+    rc = test_match_literal(); if rc != 0 { failures = failures + 1; }
+    rc = test_match_wildcard(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: type tests");
+    // Type codegen tests (8)
+    rc = test_bool_type(); if rc != 0 { print_errln("  FAIL: bool_type"); failures = failures + 1; }
+    rc = test_bool_eq(); if rc != 0 { print_errln("  FAIL: bool_eq"); failures = failures + 1; }
+    rc = test_ptr_deref(); if rc != 0 { print_errln("  FAIL: ptr_deref"); failures = failures + 1; }
+    rc = test_array_index(); if rc != 0 { print_errln("  FAIL: array_index"); failures = failures + 1; }
+    rc = test_struct_fields(); if rc != 0 { print_errln("  FAIL: struct_fields"); failures = failures + 1; }
+    rc = test_struct_nested(); if rc != 0 { print_errln("  FAIL: struct_nested"); failures = failures + 1; }
+    rc = test_str_len(); if rc != 0 { print_errln("  FAIL: str_len"); failures = failures + 1; }
+    rc = test_float_to_int(); if rc != 0 { print_errln("  FAIL: float_to_int"); failures = failures + 1; }
+
+    print_errln("MARKER: decl tests");
+    // Decl codegen tests (8)
+    rc = test_fn_call(); if rc != 0 { failures = failures + 1; }
+    rc = test_fn_nested_call(); if rc != 0 { failures = failures + 1; }
+    rc = test_fn_void_return(); if rc != 0 { failures = failures + 1; }
+    rc = test_const_global(); if rc != 0 { failures = failures + 1; }
+    rc = test_var_mutate(); if rc != 0 { failures = failures + 1; }
+    rc = test_multiple_vars(); if rc != 0 { failures = failures + 1; }
+    rc = test_comptime_const(); if rc != 0 { failures = failures + 1; }
+    rc = test_fn_params(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: import tests");
+    // Import codegen tests (2)
+    rc = test_import_math(); if rc != 0 { failures = failures + 1; }
+    rc = test_import_c(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: generic tests");
+    // Generic codegen tests (4)
+    rc = test_generic_fn(); if rc != 0 { failures = failures + 1; }
+    rc = test_generic_struct(); if rc != 0 { failures = failures + 1; }
+    rc = test_nested_generic(); if rc != 0 { failures = failures + 1; }
+    rc = test_generic_twice(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: string tests");
+    // String codegen tests (2)
+    rc = test_str_literal_len(); if rc != 0 { failures = failures + 1; }
+    rc = test_str_iterate(); if rc != 0 { failures = failures + 1; }
+
+    print_errln("MARKER: C pattern tests");
+    // C output pattern tests (11)
+    rc = test_c_has_main(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_headers(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_struct(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_fn_decl(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_if(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_while(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_return(); if rc != 0 { failures = failures + 1; }
+    rc = test_c_has_comment(); if rc != 0 { failures = failures + 1; }
+    rc = test_empty_struct(); if rc != 0 { failures = failures + 1; }
+    rc = test_enum_type(); if rc != 0 { failures = failures + 1; }
+    rc = test_union_type(); if rc != 0 { failures = failures + 1; }
+
+    print_err("test_gen: ");
+    print_err(cg_int_to_str_i64(failures));
+    print_err(" failures out of 75 tests\n");
+
+    if failures > 0 { return failures; }
     return 0;
 }
