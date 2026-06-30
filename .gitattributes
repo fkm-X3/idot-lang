@@ -1,5 +1,4 @@
 # Auto-detect text files and normalize to LF
 * text=auto eol=lf
 
-*.idot linguist-detectable=false
-*.ido linguist-detectable=false
+* linguist-vendored
