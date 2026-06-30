@@ -29,6 +29,8 @@ struct SemContext {
     mono_structs: Arena,
     // Error tracking
     errors: Arena,
+    // Hash table for O(1) symbol lookup
+    sym_map: HashMap,
 }
 
 pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
@@ -41,22 +43,23 @@ pub fn s_sem_new(src: string, toks: *Arena, strs: *Arena, ty: *Arena,
         curr_scope = 0, generic_fn_decls = arena_new(4096),
         generic_struct_decls = arena_new(4096), mono_counter = 0,
         mono_fns = arena_new(4096), mono_structs = arena_new(4096), errors = arena_new(1024),
+        sym_map = hm_default(),
     };
-    { let name = "void"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "bool"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "i8"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "i16"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "i32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "i64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "u8"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "u16"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "u32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "u64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "isize"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "usize"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "f32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "f64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
-    { let name = "string"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); }
+    { let name = "void"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "bool"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "i8"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "i16"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "i32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "i64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "u8"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "u16"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "u32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "u64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "isize"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "usize"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "f32"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "f64"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
+    { let name = "string"; let type_id = s_resolve_named_type(name, ctx.types); let name_off = str_arena_append(strs, name); let soff = sym_store(&ctx.syms, name_off, SYMK_TYPE, type_id); hm_put(&ctx.sym_map, name, soff); }
     // Record scope 0 boundaries
     arena_append_i64(&ctx.scope_start, 0);
     arena_append_i64(&ctx.scope_end, ctx.syms.len / SYM_BYTES);
@@ -118,6 +121,13 @@ fn s_name_matches(strs: *Arena, name_off: i64, target: string) -> i32 {
     return s_str_eq(name, target);
 }
 
+fn s_sym_store(ctx: *SemContext, name_off: i64, kind: i32, type_id: i32) -> i64 {
+    let soff = sym_store(&(*ctx).syms, name_off, kind, type_id);
+    let key = str_read((*ctx).strs, name_off);
+    hm_put(&(*ctx).sym_map, key, soff);
+    return soff;
+}
+
 // ====================================================================
 // Scope management
 // ====================================================================
@@ -137,18 +147,8 @@ fn s_pop_scope(ctx: *SemContext) -> void {
 }
 
 fn s_find_sym(ctx: *SemContext, name_off: i64) -> i64 {
-    let total = (*ctx).syms.len / SYM_BYTES;
-    if total == 0 { return -1; }
     let target_name = str_read((*ctx).strs, name_off);
-    let mut i: i64 = total - 1;
-    while i >= 0 {
-        let soff = i * SYM_BYTES;
-        let sn = sym_name(&(*ctx).syms, soff);
-        let sn_str = str_read((*ctx).strs, sn);
-        if s_str_eq(target_name, sn_str) { return soff; }
-        i = i - 1;
-    }
-    return -1;
+    return hm_get(&(*ctx).sym_map, target_name);
 }
 
 fn s_find_sym_by_name(strs: *Arena, syms: *Arena, name: string) -> i64 {
@@ -192,17 +192,17 @@ fn s_collect_top_level(ctx: *SemContext) -> void {
             } else {
                 let ret_type = decl_get_extra2((*ctx).decls, doff);
                 let fid = type_store((*ctx).types, TY_NAMED, name_off, 0);
-                sym_store(&ctx.syms, name_off, SYMK_FUNCTION, fid);
+                s_sym_store(ctx, name_off, SYMK_FUNCTION, fid);
             }
         } else if tag == DC_STRUCT {
             if is_gen != 0 {
                 // Store generic struct template
                 arena_append_i64(&ctx.generic_struct_decls, doff);
             } else {
-                sym_store(&ctx.syms, name_off, SYMK_TYPE, 0);
+                s_sym_store(ctx, name_off, SYMK_TYPE, 0);
             }
         } else if tag == DC_ENUM {
-            sym_store(&ctx.syms, name_off, SYMK_TYPE, 0);
+            s_sym_store(ctx, name_off, SYMK_TYPE, 0);
         }
         i = i + 1;
     }
@@ -270,7 +270,7 @@ fn s_analyze_stmt(ctx: *SemContext, soff: i64) -> void {
                     decl_set_extra((*ctx).decls, doff, type_off);
                 }
             }
-            sym_store(&ctx.syms, name_off, SYMK_VARIABLE, type_off);
+            s_sym_store(ctx, name_off, SYMK_VARIABLE, type_off);
             // Multi-return: register extra names from children arena
             let names_start = decl_get_data2((*ctx).decls, doff);
             if names_start >= 0 {
@@ -279,7 +279,7 @@ fn s_analyze_stmt(ctx: *SemContext, soff: i64) -> void {
                 let mut ei: i32 = 0;
                 while ei < extra_count {
                     let ename_off = children_read((*ctx).children, (names_start + ei) * 8);
-                    sym_store(&ctx.syms, ename_off, SYMK_VARIABLE, type_off);
+                    s_sym_store(ctx, ename_off, SYMK_VARIABLE, type_off);
                     ei = ei + 1;
                 }
             }
@@ -290,7 +290,7 @@ fn s_analyze_stmt(ctx: *SemContext, soff: i64) -> void {
             }
             let name_off = decl_get_name((*ctx).decls, doff);
             let type_off = decl_get_extra((*ctx).decls, doff);
-            sym_store(&ctx.syms, name_off, SYMK_VARIABLE, type_off);
+            s_sym_store(ctx, name_off, SYMK_VARIABLE, type_off);
         }
     } else if st_tag == ST_DEFER || st_tag == ST_ERRDEFER {
         if st_expr_off >= 0 {
@@ -1043,7 +1043,7 @@ fn s_try_monomorphize_struct(ctx: *SemContext, name_off: i64, init_eoff: i64) ->
     decl_set_type((*ctx).decls, mono_doff, 0); // non-generic
 
     // Register as a type symbol so codegen picks it up
-    sym_store(&(*ctx).syms, mangled_name_off, SYMK_TYPE, 0);
+    s_sym_store(ctx, mangled_name_off, SYMK_TYPE, 0);
 
     // Record for tracking
     arena_append_i64(&ctx.mono_structs, mono_doff);

@@ -82,3 +82,207 @@ pub fn sb_get_ptr(sb: *DynamicArray) -> *u8 {
 pub fn sb_get_len(sb: *DynamicArray) -> usize {
     return (*sb).len;
 }
+
+// ====================================================================
+// HashMap[string, i64] — open addressing with linear probing
+// Each entry: hash(i64) + key_off(i64) + value(i64) + occ(i32) = 28 bytes
+// Keys are stored in a separate growable key buffer:
+//   [len(i64)][bytes...] consecutively; key_off points to the len field
+// ====================================================================
+const HM_EMPTY: i32 = 0;
+const HM_OCCUPIED: i32 = 1;
+const HM_ENTRY_BYTES: i64 = 28;
+const HM_DEFAULT_CAP: i64 = 16;
+const HM_DEFAULT_KBUF: i64 = 512;
+
+struct HashMap {
+    entries: *u8,
+    e_cap: i64,
+    count: i64,
+    keys: *u8,
+    k_len: i64,
+    k_cap: i64,
+}
+
+fn hm_hash(key: string) -> i64 {
+    let hash: i64 = 5381;
+    let mut i: i64 = 0;
+    while i < key.len {
+        hash = (hash * 33) ^ key.ptr[i];
+        i = i + 1;
+    }
+    return hash;
+}
+
+fn hm_round_up(n: i64) -> i64 {
+    if n <= 1 { return 1; }
+    let mut v: i64 = n - 1;
+    v = v | (v >> 1);
+    v = v | (v >> 2);
+    v = v | (v >> 4);
+    v = v | (v >> 8);
+    v = v | (v >> 16);
+    v = v | (v >> 32);
+    return v + 1;
+}
+
+fn hm_store_key(hm: *HashMap, key: string) -> i64 {
+    let off: i64 = (*hm).k_len;
+    let needed: i64 = off + 8 + key.len;
+    if needed > (*hm).k_cap {
+        let new_cap: i64 = (*hm).k_cap * 2;
+        if new_cap < needed { new_cap = needed; }
+        let new_data: *u8 = resize((*hm).keys, new_cap);
+        (*hm).keys = new_data;
+        (*hm).k_cap = new_cap;
+    }
+    memcpy((*hm).keys + off, &key.len, 8);
+    memcpy((*hm).keys + off + 8, key.ptr, key.len);
+    (*hm).k_len = needed;
+    return off;
+}
+
+fn hm_key_cmp(hm: *HashMap, key_off: i64, target: string) -> i32 {
+    let stored_ptr: *u8 = (*hm).keys + key_off;
+    let stored_len: i64 = 0;
+    memcpy(&stored_len, stored_ptr, 8);
+    if stored_len != target.len { return 0; }
+    let stored_data: *u8 = stored_ptr + 8;
+    let mut i: i64 = 0;
+    while i < stored_len {
+        if stored_data[i] != target.ptr[i] { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn hm_grow(hm: *HashMap) -> void {
+    let old_entries: *u8 = (*hm).entries;
+    let old_cap: i64 = (*hm).e_cap;
+    let old_keys: *u8 = (*hm).keys;
+    let old_k_cap: i64 = (*hm).k_cap;
+    let new_cap: i64 = old_cap * 2;
+
+    let new_entries: *u8 = alloc(new_cap * HM_ENTRY_BYTES);
+    zero_memory(new_entries, new_cap * HM_ENTRY_BYTES);
+    (*hm).entries = new_entries;
+    (*hm).e_cap = new_cap;
+    (*hm).count = 0;
+
+    let new_keys: *u8 = alloc(old_k_cap);
+    (*hm).keys = new_keys;
+    (*hm).k_len = 0;
+    (*hm).k_cap = old_k_cap;
+
+    let mut i: i64 = 0;
+    while i < old_cap {
+        let eoff: i64 = i * HM_ENTRY_BYTES;
+        let occ: i32 = 0;
+        memcpy(&occ, old_entries + eoff + 24, 4);
+        if occ == HM_OCCUPIED {
+            let h: i64 = 0; let ko: i64 = 0; let v: i64 = 0;
+            memcpy(&h, old_entries + eoff, 8);
+            memcpy(&ko, old_entries + eoff + 8, 8);
+            memcpy(&v, old_entries + eoff + 16, 8);
+            let sl: i64 = 0;
+            memcpy(&sl, old_keys + ko, 8);
+            let sk = string{ ptr = old_keys + ko + 8, len = sl };
+            hm_put(hm, sk, v);
+        }
+        i = i + 1;
+    }
+    dealloc(old_entries);
+    dealloc(old_keys);
+}
+
+pub fn hm_default() -> HashMap {
+    return hm_new(HM_DEFAULT_CAP);
+}
+
+pub fn hm_new(capacity: i64) -> HashMap {
+    let cap: i64 = HM_DEFAULT_CAP;
+    if capacity > cap { cap = hm_round_up(capacity); }
+    let ebuf: *u8 = alloc(cap * HM_ENTRY_BYTES);
+    zero_memory(ebuf, cap * HM_ENTRY_BYTES);
+    let kbuf: *u8 = alloc(HM_DEFAULT_KBUF);
+    return HashMap{
+        entries = ebuf,
+        e_cap = cap,
+        count = 0,
+        keys = kbuf,
+        k_len = 0,
+        k_cap = HM_DEFAULT_KBUF,
+    };
+}
+
+pub fn hm_deinit(hm: *HashMap) -> void {
+    dealloc((*hm).entries);
+    dealloc((*hm).keys);
+}
+
+pub fn hm_put(hm: *HashMap, key: string, value: i64) -> void {
+    let load8: i64 = (*hm).count * 8 / (*hm).e_cap;
+    if load8 >= 6 { hm_grow(hm); }
+    let hash: i64 = hm_hash(key);
+    let mask: i64 = (*hm).e_cap - 1;
+    let mut idx: i64 = hash & mask;
+    while true {
+        let eoff: i64 = idx * HM_ENTRY_BYTES;
+        let occ: i32 = 0;
+        memcpy(&occ, (*hm).entries + eoff + 24, 4);
+        if occ == HM_EMPTY {
+            memcpy((*hm).entries + eoff, &hash, 8);
+            let ko: i64 = hm_store_key(hm, key);
+            memcpy((*hm).entries + eoff + 8, &ko, 8);
+            memcpy((*hm).entries + eoff + 16, &value, 8);
+            let occ_set: i32 = HM_OCCUPIED;
+            memcpy((*hm).entries + eoff + 24, &occ_set, 4);
+            (*hm).count = (*hm).count + 1;
+            return;
+        }
+        let sh: i64 = 0;
+        memcpy(&sh, (*hm).entries + eoff, 8);
+        if sh == hash {
+            let sko: i64 = 0;
+            memcpy(&sko, (*hm).entries + eoff + 8, 8);
+            if hm_key_cmp(hm, sko, key) != 0 {
+                memcpy((*hm).entries + eoff + 16, &value, 8);
+                return;
+            }
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+pub fn hm_get(hm: *HashMap, key: string) -> i64 {
+    if (*hm).count == 0 { return -1; }
+    let hash: i64 = hm_hash(key);
+    let mask: i64 = (*hm).e_cap - 1;
+    let mut idx: i64 = hash & mask;
+    while true {
+        let eoff: i64 = idx * HM_ENTRY_BYTES;
+        let occ: i32 = 0;
+        memcpy(&occ, (*hm).entries + eoff + 24, 4);
+        if occ == HM_EMPTY { return -1; }
+        let sh: i64 = 0;
+        memcpy(&sh, (*hm).entries + eoff, 8);
+        if sh == hash {
+            let sko: i64 = 0;
+            memcpy(&sko, (*hm).entries + eoff + 8, 8);
+            if hm_key_cmp(hm, sko, key) != 0 {
+                let v: i64 = 0;
+                memcpy(&v, (*hm).entries + eoff + 16, 8);
+                return v;
+            }
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+pub fn hm_contains(hm: *HashMap, key: string) -> i32 {
+    return if hm_get(hm, key) >= 0 { 1 } else { 0 };
+}
+
+pub fn hm_len(hm: *HashMap) -> i64 {
+    return (*hm).count;
+}
