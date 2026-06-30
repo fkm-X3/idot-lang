@@ -4,6 +4,22 @@ A low-level systems language prototyped in Rust. Idot compiles to C89 and
 leverages the system C compiler for code generation. The project is building
 toward self-hosting.
 
+<!-- LANG_BAR_START -->
+### Project Language Breakdown
+
+<table>
+  <tr>
+    <td width="56%" bgcolor="#8510d8">&nbsp;</td>
+    <td width="44%" bgcolor="#dea584">&nbsp;</td>
+  </tr>
+  <tr>
+    <td align="center"><b>Idot</b> 56%</td>
+    <td align="center"><b>Rust</b> 44%</td>
+  </tr>
+</table>
+
+<!-- LANG_BAR_END -->
+
 ```bash
 # Build the compiler
 cd compiler && cargo build
