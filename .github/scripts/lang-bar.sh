@@ -47,7 +47,7 @@ cat > "$SVG" <<EOF
   <rect x="0" y="0" width="${idot_w}" height="32" rx="4" fill="#8510d8"/>
   <rect x="${idot_w}" y="0" width="${rust_w}" height="32" rx="4" fill="#dea584"/>
   <text x="$((idot_w / 2))" y="21" text-anchor="middle" font-family="sans-serif" font-size="12" fill="white" font-weight="bold">Idot ${idot_pct}%</text>
-  <text x="$((idot_w + rust_w / 2))" y="21" text-anchor="middle" font-family="sans-serif" font-size="12" fill="orange" font-weight="bold">Rust ${rust_pct}%</text>
+  <text x="$((idot_w + rust_w / 2))" y="21" text-anchor="middle" font-family="sans-serif" font-size="12" fill="white" font-weight="bold">Rust ${rust_pct}%</text>
 </svg>
 EOF
 
