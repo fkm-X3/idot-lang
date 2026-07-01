@@ -62,14 +62,16 @@ jobs:
         run: |
           cargo run --bin idot compile tests/test_generics.ido
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; else exe=""; fi
-          ./build/test_generics$exe
+          ./build/test_generics$exe || [ $? -eq 20 ]
+          # ^ test returns the result of max(10, 20) as its exit code (expected: 20)
 
       - name: Test imports
         shell: bash
         run: |
           cargo run --bin idot compile tests/test_imports.ido
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; else exe=""; fi
-          ./build/test_imports$exe
+          ./build/test_imports$exe || [ $? -eq 30 ]
+          # ^ test returns the result of add(10, 20) as its exit code (expected: 30)
 
       - name: Self-hosting, build compiler # Would have used : instead of , but yml doesn't support that
         run: cargo run --bin idot compile compiler/src/main.ido
