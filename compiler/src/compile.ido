@@ -105,6 +105,7 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
     let toks: Arena = arena_new(65536);
     let mut visited: Arena = arena_new(4096);
     let mut pending: Arena = arena_new(4096);
+    let mut file_toks: Arena = arena_new(65536);
 
     let src_off = str_arena_append(&strs, source);
     let path_off = str_arena_append(&strs, input_path);
@@ -127,7 +128,7 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
 
         let decls_before = decls.len;
 
-        let file_toks: Arena = arena_new(65536);
+        arena_reset(&file_toks);
         l_tokenize(p_src, &file_toks, &strs);
         let p = p_parser_new(p_src, &file_toks, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
         p_parse_program(&p);
@@ -146,6 +147,7 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
                     print_err("import not found: '");
                     print_err(import_name);
                     print_errln("'");
+                    arena_destroy(&file_toks);
                     return string{ ptr = alloc(1), len = 0 };
                 }
 
@@ -156,6 +158,7 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
                     print_err("error reading import: '");
                     print_err(resolved_path_s);
                     print_errln("'");
+                    arena_destroy(&file_toks);
                     return string{ ptr = alloc(1), len = 0 };
                 }
 
@@ -190,11 +193,22 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
 
     if s_had_errors(&ctx) != 0 {
         s_print_errors(&ctx);
+        s_sem_destroy(&ctx);
+        arena_destroy(&file_toks);
         return string{ ptr = alloc(1), len = 0 };
     }
 
+    // Free semantic private arenas (no longer needed after analysis)
+    s_sem_destroy(&ctx);
+
     let cg: CBackend = cg_new();
     let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
+
+    // Free codegen private arenas
+    cg_destroy(&cg);
+
+    // Free per-file token arena (no longer needed after parse phase)
+    arena_destroy(&file_toks);
 
     if show_time != 0 {
         print_errln("  Arena memory usage (used / capacity):");

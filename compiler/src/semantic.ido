@@ -309,6 +309,9 @@ fn s_collect_top_level(ctx: *SemContext) -> void {
             }
         } else if tag == DC_ENUM {
             s_sym_store(ctx, name_off, SYMK_TYPE, 0);
+        } else if tag == DC_CONST {
+            let type_off = decl_get_extra((*ctx).decls, doff);
+            s_sym_store(ctx, name_off, SYMK_VARIABLE, type_off);
         }
         i = i + 1;
     }
@@ -1455,4 +1458,17 @@ fn s_inject_mono_fns(ctx: *SemContext) -> void {
         print_err(cg_int_to_str_i64(mono_count));
         print_errln(" function(s)");
     }
+}
+
+pub fn s_sem_destroy(ctx: *SemContext) -> void {
+    arena_destroy(&(*ctx).scopes);
+    arena_destroy(&(*ctx).syms);
+    arena_destroy(&(*ctx).scope_start);
+    arena_destroy(&(*ctx).scope_end);
+    arena_destroy(&(*ctx).generic_fn_decls);
+    arena_destroy(&(*ctx).generic_struct_decls);
+    arena_destroy(&(*ctx).mono_fns);
+    arena_destroy(&(*ctx).mono_structs);
+    arena_destroy(&(*ctx).errors);
+    hm_deinit(&(*ctx).sym_map);
 }

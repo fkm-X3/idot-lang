@@ -2032,3 +2032,8 @@ fn cg_emit_expr(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     // fallback
     cg_emit_str(cg, "0");
 }
+
+pub fn cg_destroy(cg: *CBackend) -> void {
+    arena_destroy(&(*cg).defer_stack);
+    arena_destroy(&(*cg).defer_marks);
+}

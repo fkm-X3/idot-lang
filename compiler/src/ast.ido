@@ -140,6 +140,8 @@ pub fn arena_alloc(arena: *Arena, size: i64) -> i64 {
     let needed = offset + size;
     if needed > (*arena).cap {
         let new_cap = (*arena).cap * 2;
+        let max_cap = needed * 2;
+        if new_cap > max_cap { new_cap = max_cap; }
         if new_cap < needed { new_cap = needed; }
         let new_data = resize((*arena).data, new_cap);
         (*arena).data = new_data;
@@ -147,6 +149,17 @@ pub fn arena_alloc(arena: *Arena, size: i64) -> i64 {
     }
     (*arena).len = needed;
     return offset;
+}
+
+pub fn arena_reset(arena: *Arena) -> void {
+    (*arena).len = 0;
+}
+
+pub fn arena_destroy(arena: *Arena) -> void {
+    dealloc((*arena).data);
+    (*arena).data = 0;
+    (*arena).len = 0;
+    (*arena).cap = 0;
 }
 
 pub fn arena_write_i64(arena: *Arena, offset: i64, val: i64) -> void {
