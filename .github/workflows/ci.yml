@@ -71,7 +71,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; else exe=""; fi
           ./build/test_imports$exe
 
-      - name: Self-hosting: build compiler
+      - name: Self-hosting, build compiler # Would have used : instead of , but yml doesn't support that
         run: cargo run --bin idot compile compiler/src/main.ido
 
       - name: Clean up build artifacts
