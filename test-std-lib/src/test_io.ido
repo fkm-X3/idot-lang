@@ -14,26 +14,26 @@ fn str_eq(a: string, b: string) -> i32 {
 fn main() -> i32 {
     // Test write_str_to_file + read_entire_file roundtrip
     let content: string = "Hello, Idot stdio!";
-    write_str_to_file("build\\test_io_output.txt", content);
+    write_str_to_file("build/test_io_output.txt", content);
 
-    let readback = read_entire_file("build\\test_io_output.txt");
+    let readback = read_entire_file("build/test_io_output.txt");
     if readback.ptr == null { return 1; }
     if readback.len != content.len { return 2; }
     if str_eq(readback, content) == 0 { return 3; }
 
     // Test file_size
-    let file = open_file("build\\test_io_output.txt", O_RDONLY);
+    let file = open_file("build/test_io_output.txt", O_RDONLY);
     let sz = file_size(file);
     if sz != content.len { return 4; }
     close_file(file);
 
     // Test manual file open / write / read
-    let wf = open_file("build\\test_io_manual.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    let wf = open_file("build/test_io_manual.txt", O_WRONLY | O_CREAT | O_TRUNC);
     let msg: string = "Manual";
     write_file(wf, msg.ptr, msg.len);
     close_file(wf);
 
-    let rf = open_file("build\\test_io_manual.txt", O_RDONLY);
+    let rf = open_file("build/test_io_manual.txt", O_RDONLY);
     let buf = alloc(16);
     let n = read_file(rf, buf, 16);
     close_file(rf);
@@ -47,8 +47,7 @@ fn main() -> i32 {
     if buf[5] != 108 { return 11; }
     dealloc(buf);
 
-    // Cleanup temp files
-    run_system("del build\\test_io_output.txt build\\test_io_manual.txt");
+    // Note: temp files in build/ are left for inspection
 
     return 0;
 }

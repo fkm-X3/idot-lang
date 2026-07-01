@@ -3,8 +3,7 @@ import "util";
 
 pub fn cmd_add(project_dir: string, dep_name: string, git_url: string, tag: string) -> i32 {
     let mut mf_path = sb_new();
-    sb_append(&mf_path, project_dir);
-    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_path(&mf_path, project_dir, "matrix.toml");
     sb_append_byte(&mf_path, 0);
     let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
 
@@ -96,8 +95,7 @@ pub fn cmd_add(project_dir: string, dep_name: string, git_url: string, tag: stri
 
 pub fn cmd_remove(project_dir: string, name: string) -> i32 {
     let mut mf_path = sb_new();
-    sb_append(&mf_path, project_dir);
-    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_path(&mf_path, project_dir, "matrix.toml");
     sb_append_byte(&mf_path, 0);
     let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
 

@@ -5,15 +5,15 @@ import "codegen";
 import "compile";
 
 fn ensure_build_dir() -> void {
-    let mkcmd: string = "mkdir build\\ 2>nul";
-    system(mkcmd.ptr);
+    create_dir("build");
 }
 
 fn compile_and_run(src: string, stem: string, expected_exit: i32) -> i32 {
     ensure_build_dir();
 
     let src_path = sb_new();
-    sb_append(&src_path, "build\\");
+    sb_append(&src_path, "build");
+    sb_append_sep(&src_path);
     sb_append(&src_path, stem);
     sb_append(&src_path, ".ido");
     sb_append_byte(&src_path, 0);
@@ -29,26 +29,34 @@ fn compile_and_run(src: string, stem: string, expected_exit: i32) -> i32 {
     }
 
     let c_path = sb_new();
-    sb_append(&c_path, "build\\");
+    sb_append(&c_path, "build");
+    sb_append_sep(&c_path);
     sb_append(&c_path, stem);
     sb_append(&c_path, ".c");
     sb_append_byte(&c_path, 0);
     let c_path_str = string{ ptr = sb_get_ptr(&c_path), len = sb_get_len(&c_path) - 1 };
     write_str_to_file(c_path_str, c_source);
 
+    let exe_suffix = get_exe_suffix();
     let exe_path = sb_new();
-    sb_append(&exe_path, "build\\");
+    sb_append(&exe_path, "build");
+    sb_append_sep(&exe_path);
     sb_append(&exe_path, stem);
-    sb_append(&exe_path, ".exe");
+    sb_append(&exe_path, exe_suffix);
     sb_append_byte(&exe_path, 0);
     let exe_path_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
 
+    let cc = get_cc();
     let cc_cmd = sb_new();
-    sb_append(&cc_cmd, "clang -o \"");
+    sb_append(&cc_cmd, cc);
+    sb_append(&cc_cmd, " -o \"");
     sb_append(&cc_cmd, exe_path_str);
     sb_append(&cc_cmd, "\" \"");
     sb_append(&cc_cmd, c_path_str);
-    sb_append(&cc_cmd, "\" -Wl,/subsystem:console");
+    sb_append(&cc_cmd, "\"");
+    if needs_subsystem_flag() != 0 {
+        sb_append(&cc_cmd, " -Wl,/subsystem:console");
+    }
     sb_append_byte(&cc_cmd, 0);
     let cc_line = string{ ptr = sb_get_ptr(&cc_cmd), len = sb_get_len(&cc_cmd) };
     let rc = system(cc_line.ptr);
@@ -83,7 +91,8 @@ fn compile_check_c(src: string, stem: string, expected: string) -> i32 {
     ensure_build_dir();
 
     let src_path = sb_new();
-    sb_append(&src_path, "build/");
+    sb_append(&src_path, "build");
+    sb_append_sep(&src_path);
     sb_append(&src_path, stem);
     sb_append(&src_path, ".ido");
     sb_append_byte(&src_path, 0);

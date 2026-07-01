@@ -5,8 +5,7 @@ import "manifest";
 
 pub fn cmd_vendor(project_dir: string) -> i32 {
     let mut mf_path = sb_new();
-    sb_append(&mf_path, project_dir);
-    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_path(&mf_path, project_dir, "matrix.toml");
     sb_append_byte(&mf_path, 0);
     let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
 
@@ -24,15 +23,11 @@ pub fn cmd_vendor(project_dir: string) -> i32 {
         return 0;
     }
 
-    let mut mkcmd = sb_new();
-    sb_append(&mkcmd, "if not exist \"");
-    sb_append(&mkcmd, project_dir);
-    sb_append(&mkcmd, "\\vendor\" mkdir \"");
-    sb_append(&mkcmd, project_dir);
-    sb_append(&mkcmd, "\\vendor\"");
-    sb_append_byte(&mkcmd, 0);
-    let mkcmd_line = string{ ptr = sb_get_ptr(&mkcmd), len = sb_get_len(&mkcmd) };
-    system(mkcmd_line.ptr);
+    let mut vendor_dir = sb_new();
+    sb_append_path(&vendor_dir, project_dir, "vendor");
+    sb_append_byte(&vendor_dir, 0);
+    let vendor_dir_str = string{ ptr = sb_get_ptr(&vendor_dir), len = sb_get_len(&vendor_dir) - 1 };
+    create_dir(vendor_dir_str);
 
     let mut ei: i64 = 0;
     while ei < dep_count_val {
@@ -43,8 +38,8 @@ pub fn cmd_vendor(project_dir: string) -> i32 {
         if entry.git_off != 0 {
             let git_url = str_read(&strs, entry.git_off);
             let mut target_path = sb_new();
-            sb_append(&target_path, project_dir);
-            sb_append(&target_path, "\\vendor\\");
+            sb_append(&target_path, vendor_dir_str);
+            sb_append_sep(&target_path);
             sb_append(&target_path, dep_name);
             sb_append_byte(&target_path, 0);
             let target_str = string{ ptr = sb_get_ptr(&target_path), len = sb_get_len(&target_path) - 1 };

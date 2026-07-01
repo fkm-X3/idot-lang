@@ -11,7 +11,8 @@ import "cmd_vendor";
 import "cmd_bench";
 
 fn build_output_path(sb: *DynamicArray, stem: string, ext: string) -> void {
-    sb_append(sb, "build/");
+    sb_append(sb, "build");
+    sb_append_sep(sb);
     sb_append(sb, stem);
     sb_append(sb, ext);
     sb_append_byte(sb, 0);
@@ -184,16 +185,21 @@ pub fn main() -> i32 {
         return 0;
     }
 
+    let exe_suffix = get_exe_suffix();
     let mut exe_path_sb = sb_new();
-    build_output_path(&exe_path_sb, stem, ".exe");
+    build_output_path(&exe_path_sb, stem, exe_suffix);
     let exe_path = string{ ptr = sb_get_ptr(&exe_path_sb), len = sb_get_len(&exe_path_sb) - 1 };
 
+    let cc = get_cc();
     let mut cmd_line_sb = sb_new();
-    sb_append(&cmd_line_sb, "clang -o ");
+    sb_append(&cmd_line_sb, cc);
+    sb_append(&cmd_line_sb, " -o ");
     sb_append(&cmd_line_sb, exe_path);
     sb_append(&cmd_line_sb, " ");
     sb_append(&cmd_line_sb, c_path);
-    sb_append(&cmd_line_sb, " -Wl,/subsystem:console");
+    if needs_subsystem_flag() != 0 {
+        sb_append(&cmd_line_sb, " -Wl,/subsystem:console");
+    }
     sb_append_byte(&cmd_line_sb, 0);
 
     let cmd_line = string{ ptr = sb_get_ptr(&cmd_line_sb), len = sb_get_len(&cmd_line_sb) };
@@ -201,7 +207,7 @@ pub fn main() -> i32 {
     print_errln(cmd_line);
     let rc = system(cmd_line.ptr);
     if rc != 0 {
-        print_errln("clang compilation failed");
+        print_err("cc compilation failed");
         return 1;
     }
 

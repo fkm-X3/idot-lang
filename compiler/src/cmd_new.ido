@@ -15,29 +15,29 @@ pub fn cmd_new(project_name: string) -> i32 {
         return 1;
     }
 
-    let mut cmd = sb_new();
-    sb_append(&cmd, "mkdir \"");
-    sb_append(&cmd, project_name);
-    sb_append(&cmd, "\\src\"");
-    sb_append_byte(&cmd, 0);
-    let cmd_line = string{ ptr = sb_get_ptr(&cmd), len = sb_get_len(&cmd) };
-    let rc = system(cmd_line.ptr);
-    if rc != 0 {
-        print_errln("Error creating project directory");
-        return 1;
-    }
+    // Create project directory
+    create_dir(project_name);
+
+    // Create src subdirectory
+    let mut src_dir = sb_new();
+    sb_append_path(&src_dir, project_name, "src");
+    sb_append_byte(&src_dir, 0);
+    let src_dir_str = string{ ptr = sb_get_ptr(&src_dir), len = sb_get_len(&src_dir) - 1 };
+    create_dir(src_dir_str);
 
     let manifest_content = manifest_template(project_name);
     let mut mf_path = sb_new();
-    sb_append(&mf_path, project_name);
-    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_path(&mf_path, project_name, "matrix.toml");
     sb_append_byte(&mf_path, 0);
     let mf_path_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
     write_str_to_file(mf_path_str, manifest_content);
 
     let mut src_path = sb_new();
     sb_append(&src_path, project_name);
-    sb_append(&src_path, "\\src\\main.ido");
+    sb_append_sep(&src_path);
+    sb_append(&src_path, "src");
+    sb_append_sep(&src_path);
+    sb_append(&src_path, "main.ido");
     sb_append_byte(&src_path, 0);
     let src_path_str = string{ ptr = sb_get_ptr(&src_path), len = sb_get_len(&src_path) - 1 };
     let main_src: string = "fn main() -> i32 {\n    return 0;\n}\n";

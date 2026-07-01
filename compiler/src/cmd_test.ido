@@ -30,40 +30,43 @@ fn run_one_test(test_file: string, lib_dir: string, project_dir: string) -> i32 
         return 1;
     }
 
-    let mut build_cmd = sb_new();
-    sb_append(&build_cmd, "if not exist \"");
-    sb_append(&build_cmd, project_dir);
-    sb_append(&build_cmd, "\\build\" mkdir \"");
-    sb_append(&build_cmd, project_dir);
-    sb_append(&build_cmd, "\\build\"");
-    sb_append_byte(&build_cmd, 0);
-    let build_cmd_line = string{ ptr = sb_get_ptr(&build_cmd), len = sb_get_len(&build_cmd) };
-    system(build_cmd_line.ptr);
+    // Ensure build dir exists
+    let mut build_dir = sb_new();
+    sb_append_path(&build_dir, project_dir, "build");
+    sb_append_byte(&build_dir, 0);
+    let build_dir_str = string{ ptr = sb_get_ptr(&build_dir), len = sb_get_len(&build_dir) - 1 };
+    create_dir(build_dir_str);
 
     let mut c_path = sb_new();
-    sb_append(&c_path, project_dir);
-    sb_append(&c_path, "\\build\\");
+    sb_append(&c_path, build_dir_str);
+    sb_append_sep(&c_path);
     sb_append(&c_path, stem);
     sb_append(&c_path, ".c");
     sb_append_byte(&c_path, 0);
     let c_path_str = string{ ptr = sb_get_ptr(&c_path), len = sb_get_len(&c_path) - 1 };
 
+    let exe_suffix = get_exe_suffix();
     let mut exe_path = sb_new();
-    sb_append(&exe_path, project_dir);
-    sb_append(&exe_path, "\\build\\");
+    sb_append(&exe_path, build_dir_str);
+    sb_append_sep(&exe_path);
     sb_append(&exe_path, stem);
-    sb_append(&exe_path, ".exe");
+    sb_append(&exe_path, exe_suffix);
     sb_append_byte(&exe_path, 0);
     let exe_path_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
 
     write_str_to_file(c_path_str, c_source);
 
+    let cc = get_cc();
     let mut cc_cmd = sb_new();
-    sb_append(&cc_cmd, "clang -o \"");
+    sb_append(&cc_cmd, cc);
+    sb_append(&cc_cmd, " -o \"");
     sb_append(&cc_cmd, exe_path_str);
     sb_append(&cc_cmd, "\" \"");
     sb_append(&cc_cmd, c_path_str);
-    sb_append(&cc_cmd, "\" -Wl,/subsystem:console");
+    sb_append(&cc_cmd, "\"");
+    if needs_subsystem_flag() != 0 {
+        sb_append(&cc_cmd, " -Wl,/subsystem:console");
+    }
     sb_append_byte(&cc_cmd, 0);
     let cc_line = string{ ptr = sb_get_ptr(&cc_cmd), len = sb_get_len(&cc_cmd) };
     let rc = system(cc_line.ptr);
@@ -89,30 +92,26 @@ pub fn cmd_test(project_dir: string, self_hosted: i32) -> i32 {
     let mut passed: i64 = 0;
     let mut failed: i64 = 0;
 
-    // Use a batch file to list test files (cross-platform dir listing wrapper)
-    let mut bat = sb_new();
-    sb_append(&bat, "@echo off\n");
-    sb_append(&bat, "if exist \"");
-    sb_append(&bat, project_dir);
-    sb_append(&bat, "\\src\\*_test.ido\" dir /b \"");
-    sb_append(&bat, project_dir);
-    sb_append(&bat, "\\src\\*_test.ido\"\n");
-    sb_append(&bat, "if exist \"");
-    sb_append(&bat, project_dir);
-    sb_append(&bat, "\\tests\\*.ido\" dir /b \"");
-    sb_append(&bat, project_dir);
-    sb_append(&bat, "\\tests\\*.ido\"\n");
-    sb_append_byte(&bat, 0);
-    let bat_content = string{ ptr = sb_get_ptr(&bat), len = sb_get_len(&bat) };
-    write_str_to_file("_list_tests.bat", bat_content);
-
+    // List test files using platform-appropriate command
     let mut list_cmd = sb_new();
-    sb_append(&list_cmd, "cmd /c _list_tests.bat > _test_list.txt");
-    sb_append_byte(&list_cmd, 0);
+    list_test_files_cmd(project_dir, &list_cmd);
     let list_cmd_line = string{ ptr = sb_get_ptr(&list_cmd), len = sb_get_len(&list_cmd) };
-    system(list_cmd_line.ptr);
 
-    let list_content = read_entire_file("_test_list.txt");
+    // Write to temp file
+    let mut test_list_path = sb_new();
+    sb_append(&test_list_path, "_test_list.txt");
+    sb_append_byte(&test_list_path, 0);
+    let tlp = string{ ptr = sb_get_ptr(&test_list_path), len = sb_get_len(&test_list_path) - 1 };
+
+    let mut redirected_cmd = sb_new();
+    sb_append(&redirected_cmd, list_cmd_line);
+    sb_append(&redirected_cmd, " > ");
+    sb_append(&redirected_cmd, tlp);
+    sb_append_byte(&redirected_cmd, 0);
+    let redirected_cmd_str = string{ ptr = sb_get_ptr(&redirected_cmd), len = sb_get_len(&redirected_cmd) };
+    system(redirected_cmd_str.ptr);
+
+    let list_content = read_entire_file(tlp);
 
     // Parse each line and run the corresponding test
     if list_content.len > 0 {
@@ -131,7 +130,9 @@ pub fn cmd_test(project_dir: string, self_hosted: i32) -> i32 {
                             // Try src/ then tests/
                             let mut fp = sb_new();
                             sb_append(&fp, project_dir);
-                            sb_append(&fp, "\\src\\");
+                            sb_append_sep(&fp);
+                            sb_append(&fp, "src");
+                            sb_append_sep(&fp);
                             sb_append(&fp, line);
                             sb_append_byte(&fp, 0);
                             let fp_str = string{ ptr = sb_get_ptr(&fp), len = sb_get_len(&fp) - 1 };
@@ -139,7 +140,9 @@ pub fn cmd_test(project_dir: string, self_hosted: i32) -> i32 {
                             if file_exists(fp_str) == 0 {
                                 let mut fp2 = sb_new();
                                 sb_append(&fp2, project_dir);
-                                sb_append(&fp2, "\\tests\\");
+                                sb_append_sep(&fp2);
+                                sb_append(&fp2, "tests");
+                                sb_append_sep(&fp2);
                                 sb_append(&fp2, line);
                                 sb_append_byte(&fp2, 0);
                                 let fp2_str = string{ ptr = sb_get_ptr(&fp2), len = sb_get_len(&fp2) - 1 };
@@ -162,8 +165,7 @@ pub fn cmd_test(project_dir: string, self_hosted: i32) -> i32 {
     }
 
     // Cleanup
-    let cleanup_cmd: string = "del _list_tests.bat _test_list.txt 2>nul";
-    system(cleanup_cmd.ptr);
+    delete_file(tlp);
 
     if passed == 0 && failed == 0 {
         print_errln("No tests found");

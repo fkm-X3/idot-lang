@@ -4,8 +4,7 @@ import "manifest";
 
 pub fn cmd_run(project_dir: string) -> i32 {
     let mut mf_path = sb_new();
-    sb_append(&mf_path, project_dir);
-    sb_append(&mf_path, "\\matrix.toml");
+    sb_append_path(&mf_path, project_dir, "matrix.toml");
     sb_append_byte(&mf_path, 0);
     let mf_str = string{ ptr = sb_get_ptr(&mf_path), len = sb_get_len(&mf_path) - 1 };
 
@@ -17,11 +16,14 @@ pub fn cmd_run(project_dir: string) -> i32 {
     }
     let proj_name = str_read(&strs, manifest.name_off);
 
+    let exe_suffix = get_exe_suffix();
     let mut exe_path = sb_new();
     sb_append(&exe_path, project_dir);
-    sb_append(&exe_path, "\\build\\");
+    sb_append_sep(&exe_path);
+    sb_append(&exe_path, "build");
+    sb_append_sep(&exe_path);
     sb_append(&exe_path, proj_name);
-    sb_append(&exe_path, ".exe");
+    sb_append(&exe_path, exe_suffix);
     sb_append_byte(&exe_path, 0);
     let exe_str = string{ ptr = sb_get_ptr(&exe_path), len = sb_get_len(&exe_path) - 1 };
 

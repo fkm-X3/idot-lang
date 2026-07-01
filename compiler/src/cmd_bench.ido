@@ -20,30 +20,6 @@ fn sz(path: string) -> i64 {
     return n;
 }
 
-fn hash_file(path: string) -> string {
-    let mut c = sb_new();
-    sb_append(&c, "certutil -hashfile \"");
-    sb_append(&c, path);
-    sb_append(&c, "\" SHA256 > \"build\\bench\\_hash.txt\"");
-    sb_append_byte(&c, 0);
-    let cs = string{ ptr = sb_get_ptr(&c), len = sb_get_len(&c) };
-    system(cs.ptr);
-
-    let content = read_entire_file("build\\bench\\_hash.txt");
-    let mut i: i64 = 0;
-    while i < content.len && content.ptr[i] != 10 && content.ptr[i] != 13 {
-        i = i + 1;
-    }
-    while i < content.len && (content.ptr[i] == 10 || content.ptr[i] == 13) {
-        i = i + 1;
-    }
-    let start = i;
-    while i < content.len && content.ptr[i] != 10 && content.ptr[i] != 13 {
-        i = i + 1;
-    }
-    return string{ ptr = content.ptr + start, len = i - start };
-}
-
 fn print_metric(label: string, v: i64, unit: string) -> void {
     print("  ");
     print(label);
@@ -72,12 +48,96 @@ fn sb_a(sb: *DynamicArray, s: string) -> void {
     sb_append(sb, s);
 }
 
+fn build_main_path(sb: *DynamicArray, ext: string) -> void {
+    sb_append(sb, "build");
+    sb_append_sep(sb);
+    sb_append(sb, "main");
+    sb_append(sb, ext);
+}
+
+fn build_bench_path(sb: *DynamicArray, name: string) -> void {
+    sb_append(sb, "build");
+    sb_append_sep(sb);
+    sb_append(sb, "bench");
+    sb_append_sep(sb);
+    sb_append(sb, name);
+}
+
+fn bench_dir() -> string {
+    let mut d = sb_new();
+    sb_append(&d, "build");
+    sb_append_sep(&d);
+    sb_append(&d, "bench");
+    sb_append_byte(&d, 0);
+    return string{ ptr = sb_get_ptr(&d), len = sb_get_len(&d) - 1 };
+}
+
+fn stage_name(stage: i64) -> string {
+    let mut s = sb_new();
+    sb_append(&s, "stage");
+    sb_append(&s, cg_int_to_str_i64(stage));
+    sb_append_byte(&s, 0);
+    return string{ ptr = sb_get_ptr(&s), len = sb_get_len(&s) - 1 };
+}
+
+fn cmd_string(compiler: string, src: string) -> string {
+    let mut c = sb_new();
+    sb_append(&c, compiler);
+    sb_append(&c, " compile \"");
+    sb_append(&c, src);
+    sb_append(&c, "\" --lib-dir lib --time");
+    sb_append_byte(&c, 0);
+    return string{ ptr = sb_get_ptr(&c), len = sb_get_len(&c) - 1 };
+}
+
+fn stage_and_measure(stage: i64, compiler: string, src: string,
+                     c_size: *i64, exe_size: *i64, hash_out: *string) -> i32 {
+    let cmd_str = cmd_string(compiler, src);
+    let rc = r(cmd_str);
+    if rc != 0 { return rc; }
+
+    let mut exe_suffix = get_exe_suffix();
+    let mut c_src_path = sb_new();
+    build_main_path(&c_src_path, ".c");
+    let c_src_str = string{ ptr = sb_get_ptr(&c_src_path), len = sb_get_len(&c_src_path) - 1 };
+
+    let mut exe_src_path = sb_new();
+    build_main_path(&exe_src_path, exe_suffix);
+    let exe_src_str = string{ ptr = sb_get_ptr(&exe_src_path), len = sb_get_len(&exe_src_path) - 1 };
+
+    let sname = stage_name(stage);
+    let mut c_dst = sb_new();
+    build_bench_path(&c_dst, sname);
+    sb_append(&c_dst, ".c");
+    sb_append_byte(&c_dst, 0);
+    let c_dst_str = string{ ptr = sb_get_ptr(&c_dst), len = sb_get_len(&c_dst) - 1 };
+
+    let mut exe_dst = sb_new();
+    build_bench_path(&exe_dst, sname);
+    sb_append(&exe_dst, exe_suffix);
+    sb_append_byte(&exe_dst, 0);
+    let exe_dst_str = string{ ptr = sb_get_ptr(&exe_dst), len = sb_get_len(&exe_dst) - 1 };
+
+    copy_file(c_src_str, c_dst_str);
+    copy_file(exe_src_str, exe_dst_str);
+    delete_file(exe_src_str);
+
+    (*c_size) = sz(c_dst_str);
+    (*exe_size) = sz(exe_dst_str);
+    (*hash_out) = hash_file_sha256(exe_dst_str);
+    return 0;
+}
+
 pub fn cmd_bench(quick: i32, save_path: string) -> i32 {
     let self_ptr = __ido_get_argv(0);
     let self_str = string{ ptr = self_ptr, len = strlen(self_ptr) };
-    let src: string = "compiler\\src\\main.ido";
+    let mut src = sb_new();
+    sb_append_path(&src, "compiler", "src");
+    sb_append(&src, "main.ido");
+    sb_append_byte(&src, 0);
+    let src_str = string{ ptr = sb_get_ptr(&src), len = sb_get_len(&src) - 1 };
 
-    if file_exists(src) == 0 {
+    if file_exists(src_str) == 0 {
         print_err("error: source file not found -- run from repo root\n");
         return 1;
     }
@@ -87,29 +147,18 @@ pub fn cmd_bench(quick: i32, save_path: string) -> i32 {
     print("  Compiler: ");
     println(self_str);
     print("  Source:   ");
-    println(src);
+    println(src_str);
     println("");
 
-    r("if not exist \"build\\bench\" mkdir \"build\\bench\"");
+    create_dir(bench_dir());
 
     // ────── Stage 1 ──────
     println("--- Stage 1 (Bootstrap) ---");
-    let mut cmd1 = sb_new();
-    sb_append(&cmd1, self_str);
-    sb_append(&cmd1, " compile \"");
-    sb_append(&cmd1, src);
-    sb_append(&cmd1, "\" --lib-dir lib --time");
-    sb_append_byte(&cmd1, 0);
-    let rc1 = r(string{ ptr = sb_get_ptr(&cmd1), len = sb_get_len(&cmd1) });
+    let mut s1_c: i64 = 0;
+    let mut s1_exe: i64 = 0;
+    let mut s1_hash: string = string{ ptr = alloc(1), len = 0 };
+    let rc1 = stage_and_measure(1, self_str, src_str, &s1_c, &s1_exe, &s1_hash);
     if rc1 != 0 { println("  stage 1 failed"); return 1; }
-
-    r("copy /Y \"build\\main.c\" \"build\\bench\\stage1.c\" >nul 2>&1");
-    r("copy /Y \"build\\main.exe\" \"build\\bench\\stage1.exe\" >nul 2>&1");
-    r("del /Q \"build\\main.exe\" 2>nul");
-
-    let s1_c = sz("build\\bench\\stage1.c");
-    let s1_exe = sz("build\\bench\\stage1.exe");
-    let s1_hash = hash_file("build\\bench\\stage1.exe");
     print_metric("C source size", s1_c, "bytes");
     print_metric("Binary size", s1_exe, "bytes");
     print_hash("SHA256", s1_hash);
@@ -117,21 +166,18 @@ pub fn cmd_bench(quick: i32, save_path: string) -> i32 {
 
     // ────── Stage 2 ──────
     println("--- Stage 2 (Self-hosted) ---");
-    let mut cmd2 = sb_new();
-    sb_append(&cmd2, "build\\bench\\stage1.exe compile \"");
-    sb_append(&cmd2, src);
-    sb_append(&cmd2, "\" --lib-dir lib --time");
-    sb_append_byte(&cmd2, 0);
-    let rc2 = r(string{ ptr = sb_get_ptr(&cmd2), len = sb_get_len(&cmd2) });
+    let sname1 = stage_name(1);
+    let mut sname1_exe = sb_new();
+    build_bench_path(&sname1_exe, sname1);
+    sb_append(&sname1_exe, get_exe_suffix());
+    sb_append_byte(&sname1_exe, 0);
+    let stage1_exe = string{ ptr = sb_get_ptr(&sname1_exe), len = sb_get_len(&sname1_exe) - 1 };
+
+    let mut s2_c: i64 = 0;
+    let mut s2_exe: i64 = 0;
+    let mut s2_hash: string = string{ ptr = alloc(1), len = 0 };
+    let rc2 = stage_and_measure(2, stage1_exe, src_str, &s2_c, &s2_exe, &s2_hash);
     if rc2 != 0 { println("  stage 2 failed"); return 1; }
-
-    r("copy /Y \"build\\main.c\" \"build\\bench\\stage2.c\" >nul 2>&1");
-    r("copy /Y \"build\\main.exe\" \"build\\bench\\stage2.exe\" >nul 2>&1");
-    r("del /Q \"build\\main.exe\" 2>nul");
-
-    let s2_c = sz("build\\bench\\stage2.c");
-    let s2_exe = sz("build\\bench\\stage2.exe");
-    let s2_hash = hash_file("build\\bench\\stage2.exe");
     print_metric("C source size", s2_c, "bytes");
     print_metric("Binary size", s2_exe, "bytes");
     print_hash("SHA256", s2_hash);
@@ -143,21 +189,15 @@ pub fn cmd_bench(quick: i32, save_path: string) -> i32 {
     let s3_hash: string = string{ ptr = alloc(1), len = 0 };
     if quick == 0 {
         println("--- Stage 3 (Stability) ---");
-        let mut cmd3 = sb_new();
-        sb_append(&cmd3, "build\\bench\\stage2.exe compile \"");
-        sb_append(&cmd3, src);
-        sb_append(&cmd3, "\" --lib-dir lib --time");
-        sb_append_byte(&cmd3, 0);
-        let rc3 = r(string{ ptr = sb_get_ptr(&cmd3), len = sb_get_len(&cmd3) });
+        let sname2 = stage_name(2);
+        let mut sname2_exe = sb_new();
+        build_bench_path(&sname2_exe, sname2);
+        sb_append(&sname2_exe, get_exe_suffix());
+        sb_append_byte(&sname2_exe, 0);
+        let stage2_exe = string{ ptr = sb_get_ptr(&sname2_exe), len = sb_get_len(&sname2_exe) - 1 };
+
+        let rc3 = stage_and_measure(3, stage2_exe, src_str, &s3_c, &s3_exe, &s3_hash);
         if rc3 != 0 { println("  stage 3 failed"); return 1; }
-
-        r("copy /Y \"build\\main.c\" \"build\\bench\\stage3.c\" >nul 2>&1");
-        r("copy /Y \"build\\main.exe\" \"build\\bench\\stage3.exe\" >nul 2>&1");
-        r("del /Q \"build\\main.exe\" 2>nul");
-
-        s3_c = sz("build\\bench\\stage3.c");
-        s3_exe = sz("build\\bench\\stage3.exe");
-        s3_hash = hash_file("build\\bench\\stage3.exe");
         print_metric("C source size", s3_c, "bytes");
         print_metric("Binary size", s3_exe, "bytes");
         print_hash("SHA256", s3_hash);
@@ -210,8 +250,6 @@ pub fn cmd_bench(quick: i32, save_path: string) -> i32 {
         }
         print_bool("  Stage 2 == Stage 3 (bootstrap verified)", s2_eq_s3);
     }
-
-    r("del /Q \"build\\bench\\_hash.txt\" 2>nul");
 
     if save_path.len > 0 {
         let mut md = sb_new();

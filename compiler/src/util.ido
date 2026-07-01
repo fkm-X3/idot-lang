@@ -78,3 +78,171 @@ pub fn file_exists(path: string) -> i32 {
 pub fn is_ws(c: u8) -> i32 {
     return c == 32 || c == 9;
 }
+
+// ────── Cross-platform helpers ──────
+
+pub fn is_windows() -> i32 {
+    let os_name: string = "OS";
+    let os_ptr = getenv(os_name.ptr);
+    if os_ptr == 0 { return 0; }
+    let os_val = string{ ptr = os_ptr, len = strlen(os_ptr) };
+    return str_eq(os_val, "Windows_NT");
+}
+
+pub fn sb_append_sep(sb: *DynamicArray) -> void {
+    if is_windows() != 0 { sb_append_byte(sb, 92); }
+    else { sb_append_byte(sb, 47); }
+}
+
+pub fn sb_append_path(sb: *DynamicArray, prefix: string, suffix: string) -> void {
+    sb_append(sb, prefix);
+    sb_append_sep(sb);
+    sb_append(sb, suffix);
+}
+
+pub fn get_cc() -> string {
+    if is_windows() != 0 { return "clang"; }
+    return "cc";
+}
+
+pub fn get_exe_suffix() -> string {
+    if is_windows() != 0 { return ".exe"; }
+    return "";
+}
+
+pub fn needs_subsystem_flag() -> i32 {
+    return is_windows();
+}
+
+pub fn create_dir(path: string) -> i32 {
+    let mut cmd = sb_new();
+    if is_windows() != 0 {
+        sb_append(&cmd, "if not exist \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\" mkdir \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\"");
+    } else {
+        sb_append(&cmd, "mkdir -p \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\"");
+    }
+    sb_append_byte(&cmd, 0);
+    let cmd_str = string{ ptr = sb_get_ptr(&cmd), len = sb_get_len(&cmd) };
+    return system(cmd_str.ptr);
+}
+
+pub fn delete_file(path: string) -> i32 {
+    let mut cmd = sb_new();
+    if is_windows() != 0 {
+        sb_append(&cmd, "del /Q \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\" 2>nul");
+    } else {
+        sb_append(&cmd, "rm -f \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\"");
+    }
+    sb_append_byte(&cmd, 0);
+    let cmd_str = string{ ptr = sb_get_ptr(&cmd), len = sb_get_len(&cmd) };
+    return system(cmd_str.ptr);
+}
+
+pub fn copy_file(src: string, dst: string) -> i32 {
+    let mut cmd = sb_new();
+    if is_windows() != 0 {
+        sb_append(&cmd, "copy /Y \"");
+        sb_append(&cmd, src);
+        sb_append(&cmd, "\" \"");
+        sb_append(&cmd, dst);
+        sb_append(&cmd, "\" >nul 2>&1");
+    } else {
+        sb_append(&cmd, "cp \"");
+        sb_append(&cmd, src);
+        sb_append(&cmd, "\" \"");
+        sb_append(&cmd, dst);
+        sb_append(&cmd, "\"");
+    }
+    sb_append_byte(&cmd, 0);
+    let cmd_str = string{ ptr = sb_get_ptr(&cmd), len = sb_get_len(&cmd) };
+    return system(cmd_str.ptr);
+}
+
+pub fn hash_file_sha256(path: string) -> string {
+    let mut cmd = sb_new();
+    if is_windows() != 0 {
+        sb_append(&cmd, "certutil -hashfile \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\" SHA256 > \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, ".sha256\"");
+    } else {
+        sb_append(&cmd, "sha256sum \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, "\" > \"");
+        sb_append(&cmd, path);
+        sb_append(&cmd, ".sha256\"");
+    }
+    sb_append_byte(&cmd, 0);
+    let cmd_str = string{ ptr = sb_get_ptr(&cmd), len = sb_get_len(&cmd) };
+    system(cmd_str.ptr);
+
+    let hash_path = sb_new();
+    sb_append(&hash_path, path);
+    sb_append(&hash_path, ".sha256");
+    sb_append_byte(&hash_path, 0);
+    let hash_path_str = string{ ptr = sb_get_ptr(&hash_path), len = sb_get_len(&hash_path) - 1 };
+    let content = read_entire_file(hash_path_str);
+
+    // Parse: first line is the hash on Unix (sha256sum: "hash  filename")
+    // On Windows (certutil): "SHA256 hash of <path>:" header, then hash on line 2
+    let mut i: i64 = 0;
+    // Skip to first newline
+    while i < content.len && content.ptr[i] != 10 && content.ptr[i] != 13 {
+        i = i + 1;
+    }
+    // Skip newline chars
+    while i < content.len && (content.ptr[i] == 10 || content.ptr[i] == 13) {
+        i = i + 1;
+    }
+    let start = i;
+    // Read hash up to space or newline
+    while i < content.len && content.ptr[i] != 32 && content.ptr[i] != 10 && content.ptr[i] != 13 {
+        i = i + 1;
+    }
+    let hash = string{ ptr = content.ptr + start, len = i - start };
+
+    // Cleanup
+    delete_file(hash_path_str);
+
+    return hash;
+}
+
+pub fn list_test_files_cmd(project_dir: string, sb: *DynamicArray) -> void {
+    if is_windows() != 0 {
+        sb_append(sb, "cmd /c \"dir /b \"");
+        sb_append(sb, project_dir);
+        sb_append_sep(sb);
+        sb_append(sb, "src");
+        sb_append_sep(sb);
+        sb_append(sb, "*_test.ido\" \"");
+        sb_append(sb, project_dir);
+        sb_append_sep(sb);
+        sb_append(sb, "tests");
+        sb_append_sep(sb);
+        sb_append(sb, "*.ido\" 2>nul\"");
+    } else {
+        sb_append(sb, "ls -1 \"");
+        sb_append(sb, project_dir);
+        sb_append_sep(sb);
+        sb_append(sb, "src");
+        sb_append_sep(sb);
+        sb_append(sb, "*_test.ido\" \"");
+        sb_append(sb, project_dir);
+        sb_append_sep(sb);
+        sb_append(sb, "tests");
+        sb_append_sep(sb);
+        sb_append(sb, "*.ido\" 2>/dev/null | xargs -n1 basename");
+    }
+    sb_append_byte(sb, 0);
+}
