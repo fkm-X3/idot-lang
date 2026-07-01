@@ -150,6 +150,9 @@ impl CBackend {
         self.emit_line("#include <stddef.h>");
         self.emit_line("#include <stdint.h>");
         self.emit_line("#include <stdbool.h>");
+        self.emit_line("#include <string.h>");
+        self.emit_line("#include <stdlib.h>");
+        self.emit_line("#include <math.h>");
         // Include platform-specific headers for POSIX I/O and O_* flags
         self.emit_line("#if defined(_WIN32) || defined(_WIN64)");
         self.emit_line("#include <io.h>"); // _open, _write, _close on Windows (mingw/MSVC)
@@ -355,21 +358,27 @@ impl CBackend {
     // === Declarations ===
 
     fn emit_extern_fn(&mut self, f: &FnDecl) {
-        // Certain POSIX I/O functions have definitions in <io.h> on Windows, which
-        // cause conflicting declarations if we emit them as extern. Guard those
-        // declarations with a platform check.
-        const POSIX_IO_FUNCS: [&str; 5] = ["write", "read", "open", "close", "lseek"];
-        if POSIX_IO_FUNCS.contains(&f.name.as_str()) {
-            self.emit_line("#if !defined(_WIN32) && !defined(_WIN64)");
-            self.output.push_str("extern ");
-            self.emit_fn_sig(f);
-            self.emit_line(";");
-            self.emit_line("#endif");
-        } else {
-            self.output.push_str("extern ");
-            self.emit_fn_sig(f);
-            self.emit_line(";");
+        // Skip emission for standard library functions declared by the
+        // included system headers (<string.h>, <stdlib.h>, <math.h>,
+        // <unistd.h>/<io.h>). Their C signatures differ from what Idot
+        // generates (e.g. uint8_t* vs void*/const char*), causing
+        // conflicting-declaration errors on Linux.
+        const STD_FUNCS: &[&str] = &[
+            // POSIX I/O (<unistd.h> on Linux, <io.h> on Windows)
+            "write", "read", "open", "close", "lseek",
+            // <string.h>
+            "memset", "memcpy", "memmove", "strlen", "strcmp", "strncmp",
+            // <stdlib.h>
+            "malloc", "calloc", "realloc", "free", "exit", "system", "getenv",
+            // <math.h>
+            "sqrt", "sin", "cos", "tan", "pow", "floor", "ceil", "fabs", "fmod",
+        ];
+        if STD_FUNCS.contains(&f.name.as_str()) {
+            return;
         }
+        self.output.push_str("extern ");
+        self.emit_fn_sig(f);
+        self.emit_line(";");
     }
 
     fn emit_fn_sig(&mut self, f: &FnDecl) {

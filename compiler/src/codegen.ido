@@ -698,6 +698,39 @@ fn cg_str_is_posix_io_fn(name: string) -> i32 {
     return 0;
 }
 
+fn cg_str_is_system_fn(name: string) -> i32 {
+    // Return 1 if the function is declared by one of the included headers
+    // (<unistd.h>/<io.h>, <string.h>, <stdlib.h>, <math.h>), so we can
+    // skip emitting our own extern declaration (which would conflict).
+    if cg_str_is_posix_io_fn(name) != 0 { return 1; }
+    // <string.h>
+    if cg_str_matches(name, "memset") { return 1; }
+    if cg_str_matches(name, "memcpy") { return 1; }
+    if cg_str_matches(name, "memmove") { return 1; }
+    if cg_str_matches(name, "strlen") { return 1; }
+    if cg_str_matches(name, "strcmp") { return 1; }
+    if cg_str_matches(name, "strncmp") { return 1; }
+    // <stdlib.h>
+    if cg_str_matches(name, "malloc") { return 1; }
+    if cg_str_matches(name, "calloc") { return 1; }
+    if cg_str_matches(name, "realloc") { return 1; }
+    if cg_str_matches(name, "free") { return 1; }
+    if cg_str_matches(name, "exit") { return 1; }
+    if cg_str_matches(name, "system") { return 1; }
+    if cg_str_matches(name, "getenv") { return 1; }
+    // <math.h>
+    if cg_str_matches(name, "sqrt") { return 1; }
+    if cg_str_matches(name, "sin") { return 1; }
+    if cg_str_matches(name, "cos") { return 1; }
+    if cg_str_matches(name, "tan") { return 1; }
+    if cg_str_matches(name, "pow") { return 1; }
+    if cg_str_matches(name, "floor") { return 1; }
+    if cg_str_matches(name, "ceil") { return 1; }
+    if cg_str_matches(name, "fabs") { return 1; }
+    if cg_str_matches(name, "fmod") { return 1; }
+    return 0;
+}
+
 fn cg_str_is_win_conflict_const(name: string) -> i32 {
     if cg_str_matches(name, "O_RDONLY") { return 1; }
     if cg_str_matches(name, "O_WRONLY") { return 1; }
@@ -718,6 +751,9 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
     cg_emit_line(cg, "#include <stddef.h>");
     cg_emit_line(cg, "#include <stdint.h>");
     cg_emit_line(cg, "#include <stdbool.h>");
+    cg_emit_line(cg, "#include <string.h>");
+    cg_emit_line(cg, "#include <stdlib.h>");
+    cg_emit_line(cg, "#include <math.h>");
     cg_emit_line(cg, "#if defined(_WIN32) || defined(_WIN64)");
     cg_emit_line(cg, "#include <io.h>");
     cg_emit_line(cg, "#else");
@@ -778,15 +814,13 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
             if decl_is_generic(type_id) != 0 { i = i + 1; continue; }
             let fn_name_off = decl_get_name(decls, doff);
             let fn_name = str_read(strs, fn_name_off);
-            if is_extern != 0 && cg_str_is_posix_io_fn(fn_name) {
-                cg_emit_line(cg, "#if !defined(_WIN32) && !defined(_WIN64)");
+            if is_extern != 0 && cg_str_is_system_fn(fn_name) {
+                i = i + 1;
+                continue;
             }
             cg_emit_fn_sig(cg, strs, types, decls, children, doff, is_extern);
             cg_emit_line(cg, ";");
             sb_append(&(*cg).out, "\n");
-            if is_extern != 0 && cg_str_is_posix_io_fn(fn_name) {
-                cg_emit_line(cg, "#endif");
-            }
         }
         i = i + 1;
     }
