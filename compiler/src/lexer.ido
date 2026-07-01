@@ -263,6 +263,20 @@ fn l_keyword(s: string, strs: *Arena) -> i32 {
     return TK_IDENT;
 }
 
+pub fn get_line_col(source: string, pos: i64, line: *i64, col: *i64) -> void {
+    let mut l: i64 = 1;
+    let mut c: i64 = 1;
+    let mut i: i64 = 0;
+    while i < pos && i < source.len {
+        let ch = source.ptr[i];
+        if ch == 10 { l = l + 1; c = 1; }
+        else { c = c + 1; }
+        i = i + 1;
+    }
+    (*line) = l;
+    (*col) = c;
+}
+
 fn l_s2(s: string, a: u8, b: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b; }
 fn l_s3(s: string, a: u8, b: u8, c: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c; }
 fn l_s4(s: string, a: u8, b: u8, c: u8, d: u8) -> bool { return s.ptr[0]==a && s.ptr[1]==b && s.ptr[2]==c && s.ptr[3]==d; }

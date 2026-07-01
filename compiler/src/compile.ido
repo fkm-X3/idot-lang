@@ -188,6 +188,11 @@ pub fn compile_file(source: string, input_path: string, base_dir: string,
     let ctx = s_sem_new(source, &dummy_toks, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
     s_sem_analyze(&ctx);
 
+    if s_had_errors(&ctx) != 0 {
+        s_print_errors(&ctx);
+        return string{ ptr = alloc(1), len = 0 };
+    }
+
     let cg: CBackend = cg_new();
     let output = cg_generate(&cg, source, &strs, &types, &exprs, &stmts, &decls, &children, &fargs);
 

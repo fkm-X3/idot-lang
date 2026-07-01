@@ -12,12 +12,13 @@ struct Parser {
     children: *Arena,
     fargs: *Arena,
     pos: i64,
+    has_error: i32,
 }
 
 pub fn p_parser_new(s: string, toks: *Arena, strs: *Arena, ty: *Arena,
                   ex: *Arena, st: *Arena, dc: *Arena, ch: *Arena, fa: *Arena) -> Parser {
     return Parser{ source = s, tokens = toks, strs = strs, types = ty,
-                   exprs = ex, stmts = st, decls = dc, children = ch, fargs = fa, pos = 0 };
+                   exprs = ex, stmts = st, decls = dc, children = ch, fargs = fa, pos = 0, has_error = 0 };
 }
 
 fn p_pk(p: *Parser) -> i32 {
@@ -28,15 +29,31 @@ fn p_ad(p: *Parser) -> i32 {
 }
 fn p_ex(p: *Parser, exp: i32) -> void {
     if p_pk(p) != exp {
-        print_err("parse error pos=");
-        print_err(cg_int_to_str_i64((*p).pos));
-        print_err(" expected ");
+        let toff = (*p).pos * TOKEN_BYTES;
+        let tpos = token_start((*p).tokens, toff);
+        let line: i64 = 0;
+        let col: i64 = 0;
+        get_line_col((*p).source, tpos, &line, &col);
+        print_err("parse error at ");
+        print_err(cg_int_to_str_i64(line));
+        print_err(":");
+        print_err(cg_int_to_str_i64(col));
+        print_err(": expected ");
         print_err(cg_int_to_str_i64(exp));
         print_err(" got ");
         print_errln(cg_int_to_str_i64(p_pk(p)));
-        exit(1);
+        (*p).has_error = 1;
+        if p_pk(p) != TK_EOF { (*p).pos = (*p).pos + 1; }
+        return;
     }
     (*p).pos = (*p).pos + 1;
+}
+
+fn p_sync_decl(p: *Parser) -> void {
+    while p_pk(p) != TK_EOF && p_pk(p) != TK_RBRACE {
+        if p_pk(p) == TK_SEMICOLON { p_ad(p); return; }
+        p_ad(p);
+    }
 }
 fn p_ex_id(p: *Parser) -> i64 {
     let off = (*p).pos * TOKEN_BYTES;
@@ -87,7 +104,7 @@ fn p_parse_decl(p: *Parser) -> void {
         if p_pk(p) == TK_STRUCT { p_parse_struct_decl(p); return; }
         if p_pk(p) == TK_ENUM { p_parse_enum_decl(p); return; }
         if p_pk(p) == TK_UNION { p_parse_union_decl(p); return; }
-        println("parse error: unexpected token after pub"); exit(1);
+        print_errln("parse error: unexpected token after pub"); p_sync_decl(p); return;
     }
     if p_pk(p) == TK_FN { p_parse_fn_decl(p, false, false); return; }
     if p_pk(p) == TK_CONST { p_parse_const_decl(p); return; }
@@ -95,7 +112,18 @@ fn p_parse_decl(p: *Parser) -> void {
     if p_pk(p) == TK_STRUCT { p_parse_struct_decl(p); return; }
     if p_pk(p) == TK_ENUM { p_parse_enum_decl(p); return; }
     if p_pk(p) == TK_UNION { p_parse_union_decl(p); return; }
-    println("parse error: unexpected token in decl"); exit(1);
+    let toff = (*p).pos * TOKEN_BYTES;
+    let tpos = token_start((*p).tokens, toff);
+    let line: i64 = 0;
+    let col: i64 = 0;
+    get_line_col((*p).source, tpos, &line, &col);
+    print_err("parse error at ");
+    print_err(cg_int_to_str_i64(line));
+    print_err(":");
+    print_err(cg_int_to_str_i64(col));
+    print_errln(": unexpected token in declaration");
+    (*p).has_error = 1;
+    p_sync_decl(p);
 }
 
 // === Let ===
@@ -882,9 +910,21 @@ fn p_parse_primary(p: *Parser) -> i64 {
     if k == TK_WHILE { return p_parse_while_expr(p); }
     if k == TK_MATCH { return p_parse_match_expr(p); }
 
-    println("parse error: unexpected token in expression");
-    exit(1);
-    return 0;
+    let toff = (*p).pos * TOKEN_BYTES;
+    let tpos = token_start((*p).tokens, toff);
+    let line: i64 = 0;
+    let col: i64 = 0;
+    get_line_col((*p).source, tpos, &line, &col);
+    print_err("parse error at ");
+    print_err(cg_int_to_str_i64(line));
+    print_err(":");
+    print_err(cg_int_to_str_i64(col));
+    print_errln(": unexpected token in expression");
+    (*p).has_error = 1;
+    p_sync_decl(p);
+    let node = expr_store((*p).exprs, EX_INTLIT);
+    expr_set_int((*p).exprs, node, 0);
+    return node;
 }
 
 fn p_parse_if_expr(p: *Parser) -> i64 {

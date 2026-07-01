@@ -1,6 +1,7 @@
 import "std";
 import "ast";
 import "codegen";
+import "lexer";
 
 struct SemContext {
     source: string,
@@ -126,6 +127,111 @@ fn s_sym_store(ctx: *SemContext, name_off: i64, kind: i32, type_id: i32) -> i64 
     let key = str_read((*ctx).strs, name_off);
     hm_put(&(*ctx).sym_map, key, soff);
     return soff;
+}
+
+// ====================================================================
+// Error collection
+// ====================================================================
+
+fn s_add_error(ctx: *SemContext, pos: i64, msg: string) -> void {
+    let line: i64 = 0;
+    let col: i64 = 0;
+    get_line_col((*ctx).source, pos, &line, &col);
+    let mut sb = sb_new();
+    sb_append(&sb, "error at ");
+    sb_append(&sb, cg_int_to_str_i64(line));
+    sb_append(&sb, ":");
+    sb_append(&sb, cg_int_to_str_i64(col));
+    sb_append(&sb, ": ");
+    sb_append(&sb, msg);
+    let err_str = string{ ptr = sb_get_ptr(&sb), len = sb_get_len(&sb) };
+    str_arena_append(&(*ctx).errors, err_str);
+}
+
+fn s_levenshtein(a: string, b: string) -> i64 {
+    let m = a.len;
+    let n = b.len;
+    if m == 0 { return n; }
+    if n == 0 { return m; }
+    let row_size = n + 1;
+    let prev = alloc((row_size) * 8);
+    let curr = alloc((row_size) * 8);
+    let mut j: i64 = 0;
+    while j <= n {
+        memcpy(prev + j * 8, &j, 8);
+        j = j + 1;
+    }
+    let mut i: i64 = 0;
+    while i < m {
+        let iv = i + 1;
+        memcpy(curr, &iv, 8);
+        let mut j: i64 = 0;
+        while j < n {
+            let cost: i64 = if a.ptr[i] == b.ptr[j] { 0 } else { 1 };
+            let mut delete: i64 = 0;
+            memcpy(&delete, prev + (j + 1) * 8, 8);
+            let mut ins: i64 = 0;
+            memcpy(&ins, curr + j * 8, 8);
+            let mut subst: i64 = 0;
+            memcpy(&subst, prev + j * 8, 8);
+            let mut min_val = delete + 1;
+            let ins_val = ins + 1;
+            let subst_val = subst + cost;
+            if ins_val < min_val { min_val = ins_val; }
+            if subst_val < min_val { min_val = subst_val; }
+            memcpy(curr + (j + 1) * 8, &min_val, 8);
+            j = j + 1;
+        }
+        let tmp = prev;
+        prev = curr;
+        curr = tmp;
+        i = i + 1;
+    }
+    let mut result: i64 = 0;
+    memcpy(&result, prev + n * 8, 8);
+    return result;
+}
+
+fn s_suggest_symbol(ctx: *SemContext, name: string) -> string {
+    let sym_count = (*ctx).syms.len / SYM_BYTES;
+    let mut best_dist: i64 = 100;
+    let mut best_name_off: i64 = -1;
+    let mut i: i64 = 0;
+    while i < sym_count {
+        let soff = i * SYM_BYTES;
+        let name_off = sym_name(&(*ctx).syms, soff);
+        let sym_name_str = str_read((*ctx).strs, name_off);
+        let dist = s_levenshtein(name, sym_name_str);
+        if dist < best_dist {
+            best_dist = dist;
+            best_name_off = name_off;
+        }
+        i = i + 1;
+    }
+    let mut result = string{ ptr = alloc(1), len = 0 };
+    if best_dist > 0 && best_dist <= 3 {
+        let closest = str_read((*ctx).strs, best_name_off);
+        let mut sb = sb_new();
+        sb_append(&sb, "; did you mean ");
+        sb_append(&sb, closest);
+        sb_append_byte(&sb, 63);
+        result = string{ ptr = sb_get_ptr(&sb), len = sb_get_len(&sb) };
+    }
+    return result;
+}
+
+pub fn s_had_errors(ctx: *SemContext) -> i32 {
+    if (*ctx).errors.len > 0 { return 1; }
+    return 0;
+}
+
+pub fn s_print_errors(ctx: *SemContext) -> void {
+    let mut off: i64 = 0;
+    while off < (*ctx).errors.len {
+        let err = str_read(&(*ctx).errors, off);
+        print_errln(err);
+        off = off + err.len + 1;
+    }
 }
 
 // ====================================================================
@@ -466,9 +572,7 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
                         if expr_get_tag((*ctx).exprs, msg_expr) == EX_STRLIT {
                             let msg_off = expr_get_name((*ctx).exprs, msg_expr);
                             let msg = str_read((*ctx).strs, msg_off);
-                            print_err("@compileError: ");
-                            print_errln(msg);
-                            exit(1);
+                            s_add_error(ctx, 0, msg);
                         }
                     }
                 }
@@ -575,7 +679,28 @@ fn s_analyze_expr(ctx: *SemContext, eoff: i64) -> i64 {
         return eoff;
     }
 
-    // Literals, identifiers: no analysis needed
+    if tag == EX_IDENT {
+        let name_off = expr_get_name((*ctx).exprs, eoff);
+        let name = str_read((*ctx).strs, name_off);
+        if name.len > 0 && name.ptr[0] != 64 {
+            let soff = s_find_sym(ctx, name_off);
+            if soff < 0 {
+                let suggestion = s_suggest_symbol(ctx, name);
+                let mut esb = sb_new();
+                sb_append(&esb, "undefined symbol '");
+                sb_append(&esb, name);
+                sb_append(&esb, "'");
+                if suggestion.len > 0 {
+                    sb_append(&esb, suggestion);
+                }
+                let emsg = string{ ptr = sb_get_ptr(&esb), len = sb_get_len(&esb) };
+                s_add_error(ctx, 0, emsg);
+            }
+        }
+        return eoff;
+    }
+
+    // Literals: no analysis needed
     return eoff;
 }
 
