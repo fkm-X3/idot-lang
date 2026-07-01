@@ -486,11 +486,16 @@ impl CBackend {
     }
 
     fn emit_global_const(&mut self, c: &ConstDecl) {
-        // Guard platform-specific constants that conflict with macros on Windows
-        const WIN_CONFLICT_CONSTS: [&str; 9] = ["O_RDONLY", "O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "SEEK_SET", "SEEK_CUR", "SEEK_END"];
-        let should_guard = WIN_CONFLICT_CONSTS.contains(&c.name.as_str());
-        if should_guard {
-            self.emit_line("#if !defined(_WIN32) && !defined(_WIN64)");
+        // Skip constants already defined as macros by the included system
+        // headers (<fcntl.h>, <stdio.h>, <unistd.h>).
+        const SYS_CONSTS: &[&str] = &[
+            "STDIN_FILENO", "STDOUT_FILENO", "STDERR_FILENO",
+            "O_RDONLY", "O_WRONLY", "O_RDWR",
+            "O_CREAT", "O_TRUNC", "O_APPEND",
+            "SEEK_SET", "SEEK_CUR", "SEEK_END",
+        ];
+        if SYS_CONSTS.contains(&c.name.as_str()) {
+            return;
         }
         if let Some(tv) = &c.resolved_type {
             self.var_types.insert(c.name.clone(), tv.clone());
@@ -508,9 +513,6 @@ impl CBackend {
         self.output.push_str(" = ");
         self.emit_expr(&c.init);
         self.emit_line(";");
-        if should_guard {
-            self.emit_line("#endif");
-        }
     }
 
     // === Statements ===

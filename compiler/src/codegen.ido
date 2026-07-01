@@ -744,6 +744,17 @@ fn cg_str_is_win_conflict_const(name: string) -> i32 {
     return 0;
 }
 
+fn cg_str_is_system_const(name: string) -> i32 {
+    // Return 1 if the constant is already defined as a macro by one of the
+    // included system headers (<fcntl.h>, <stdio.h>, <unistd.h>), so we
+    // skip emitting our own const declaration.
+    if cg_str_matches(name, "STDIN_FILENO") { return 1; }
+    if cg_str_matches(name, "STDOUT_FILENO") { return 1; }
+    if cg_str_matches(name, "STDERR_FILENO") { return 1; }
+    if cg_str_is_win_conflict_const(name) != 0 { return 1; }
+    return 0;
+}
+
 // === Main codegen ===
 pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
                     exprs: *Arena, stmts: *Arena, decls: *Arena, children: *Arena, fargs: *Arena) -> string {
@@ -836,13 +847,11 @@ pub fn cg_generate(cg: *CBackend, source: string, strs: *Arena, types: *Arena,
         if tag == DC_CONST {
             let const_name_off = decl_get_name(decls, doff);
             let const_name = str_read(strs, const_name_off);
-            if cg_str_is_win_conflict_const(const_name) {
-                cg_emit_line(cg, "#if !defined(_WIN32) && !defined(_WIN64)");
+            if cg_str_is_system_const(const_name) {
+                i = i + 1;
+                continue;
             }
             cg_emit_global(cg, source, strs, types, exprs, stmts, decls, children, doff, tag);
-            if cg_str_is_win_conflict_const(const_name) {
-                cg_emit_line(cg, "#endif");
-            }
         }
         i = i + 1;
     }
