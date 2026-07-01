@@ -182,7 +182,7 @@ fn s_levenshtein(a: string, b: string) -> i64 {
             memcpy(curr + (j + 1) * 8, &min_val, 8);
             j = j + 1;
         }
-        let tmp = prev;
+        let tmp: *u8 = prev;
         prev = curr;
         curr = tmp;
         i = i + 1;
@@ -337,7 +337,18 @@ fn s_analyze_bodies(ctx: *SemContext) -> void {
         if tag == DC_FN && decl_is_generic(type_id) == 0 {
             let body_off = decl_get_data((*ctx).decls, doff);
             if body_off >= 0 {
+                s_push_scope(ctx);
+                let params_start = decl_get_data2((*ctx).decls, doff);
+                let params_end = decl_get_extra((*ctx).decls, doff);
+                let mut pi: i64 = params_start;
+                while pi < params_end {
+                    let pname_off = children_read((*ctx).children, pi * 8);
+                    let ptype_off = children_read((*ctx).children, (pi + 1) * 8);
+                    s_sym_store(ctx, pname_off, SYMK_VARIABLE, ptype_off);
+                    pi = pi + 2;
+                }
                 s_analyze_expr(ctx, body_off);
+                s_pop_scope(ctx);
             }
         }
         i = i + 1;
