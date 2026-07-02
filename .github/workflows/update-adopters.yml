@@ -1,6 +1,7 @@
+---
 name: Auto-Update Early Adopters File
 
-on:
+'on':
   pull_request:
     paths:
       - 'data/early_adopters.json'
@@ -11,30 +12,29 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository code
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.event.pull_request.head.repo.full_name }}
-        ref: ${{ github.event.pull_request.head.ref }}
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: Regenerate Markdown Table
-      run: node .github/scripts/update_adopters.js
+      - name: Regenerate Markdown Table
+        run: node .github/scripts/update_adopters.js
 
-    - name: Commit and Push changes back to the PR
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add EARLY_ADOPTERS.md
-        
-        # Only commit if changes exist
-        if ! git diff --cached --quiet; then
-          git commit -m "chore: auto-update EARLY_ADOPTERS.md table"
-          git push
-        fi
+      - name: Commit and push changes back to the PR
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add EARLY_ADOPTERS.md
+
+          # Only commit if changes exist
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: auto-update EARLY_ADOPTERS.md table"
+            git push
+          fi
