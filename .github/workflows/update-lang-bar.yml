@@ -28,4 +28,3 @@ jobs:
           branch: assets
           folder: assets
           target-folder: assets
-          
