@@ -440,6 +440,94 @@ pub fn cmd_vendor(project_dir: &Path) {
     deps::vendor_all(&manifest, project_dir);
 }
 
+pub fn cmd_init() {
+    let current_dir = std::env::current_dir().unwrap_or_else(|e| {
+        eprintln!("Error getting current directory: {}", e);
+        std::process::exit(1);
+    });
+
+    let project_name = current_dir.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("my-project")
+        .to_string();
+
+    let manifest_path = current_dir.join("matrix.toml");
+    if manifest_path.exists() {
+        eprintln!("Error: matrix.toml already exists in current directory");
+        std::process::exit(1);
+    }
+
+    fs::create_dir_all(current_dir.join("src"))
+        .unwrap_or_else(|e| {
+            eprintln!("Error creating src directory: {}", e);
+            std::process::exit(1);
+        });
+
+    let manifest = Manifest::template(&project_name);
+    fs::write(&manifest_path, &manifest)
+        .unwrap_or_else(|e| {
+            eprintln!("Error writing matrix.toml: {}", e);
+            std::process::exit(1);
+        });
+
+    let main_src = format!(
+        r#"fn main() -> i32 {{
+    return 0;
+}}
+"#
+    );
+    fs::write(current_dir.join("src").join("main.ido"), &main_src)
+        .unwrap_or_else(|e| {
+            eprintln!("Error writing src/main.ido: {}", e);
+            std::process::exit(1);
+        });
+
+    println!("Initialized project in current directory");
+}
+
+pub fn cmd_update() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    let marker = repo_root.join("compiler").join("src").join("main.ido");
+    if !marker.exists() {
+        eprintln!("Error: cannot find idot-lang repository root");
+        std::process::exit(1);
+    }
+
+    println!("Pulling latest idot...");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("pull")
+        .status()
+        .expect("Failed to run git");
+    if !status.success() {
+        eprintln!("Error: git pull failed");
+        std::process::exit(1);
+    }
+
+    println!("Rebuilding compiler...");
+    let status = std::process::Command::new("cargo")
+        .arg("run")
+        .arg("--bin")
+        .arg("idot")
+        .arg("--")
+        .arg("compile")
+        .arg(&marker)
+        .current_dir(&repo_root)
+        .status()
+        .expect("Failed to run cargo");
+    if !status.success() {
+        eprintln!("Error: compiler rebuild failed");
+        std::process::exit(1);
+    }
+
+    println!("Idot updated successfully");
+}
+
 fn load_manifest(project_dir: &Path) -> Manifest {
     let manifest_path = project_dir.join("matrix.toml");
     if !manifest_path.exists() {

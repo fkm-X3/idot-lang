@@ -9,6 +9,8 @@ import "cmd_test";
 import "cmd_add";
 import "cmd_vendor";
 import "cmd_bench";
+import "cmd_init";
+import "cmd_update";
 
 fn build_output_path(sb: *DynamicArray, stem: string, ext: string) -> void {
     sb_append(sb, "build");
@@ -116,6 +118,14 @@ pub fn main() -> i32 {
             i = i + 1;
         }
         return cmd_bench(quick, save_path);
+    }
+
+    if cmd == CMD_INIT {
+        return cmd_init();
+    }
+
+    if cmd == CMD_UPDATE {
+        return cmd_update();
     }
 
     // Compiler commands (compile / run for individual files)

@@ -16,6 +16,8 @@ fn main() {
         eprintln!("  add <name> [url]     Add a dependency");
         eprintln!("  remove <name>        Remove a dependency");
         eprintln!("  vendor               Download all dependencies locally");
+        eprintln!("  init                 Initialize a project in the current directory");
+        eprintln!("  update               Pull latest idot and rebuild the compiler");
         std::process::exit(1);
     }
 
@@ -55,6 +57,12 @@ fn main() {
         "vendor" => {
             let dir = current_dir();
             commands::cmd_vendor(&dir);
+        }
+        "init" => {
+            commands::cmd_init();
+        }
+        "update" => {
+            commands::cmd_update();
         }
         _ => {
             eprintln!("Unknown command: {}", args[1]);

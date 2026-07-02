@@ -9,6 +9,8 @@ pub const CMD_ADD: i32 = 5;
 pub const CMD_REMOVE: i32 = 6;
 pub const CMD_VENDOR: i32 = 7;
 pub const CMD_BENCH: i32 = 8;
+pub const CMD_INIT: i32 = 9;
+pub const CMD_UPDATE: i32 = 10;
 pub const CMD_UNKNOWN: i32 = -1;
 pub const CMD_HELP: i32 = -2;
 
@@ -32,6 +34,8 @@ pub fn parse_command(arg: string) -> i32 {
     if str_eq_cli(arg, "remove") { return CMD_REMOVE; }
     if str_eq_cli(arg, "vendor") { return CMD_VENDOR; }
     if str_eq_cli(arg, "bench") { return CMD_BENCH; }
+    if str_eq_cli(arg, "init") { return CMD_INIT; }
+    if str_eq_cli(arg, "update") { return CMD_UPDATE; }
     if str_eq_cli(arg, "help") { return CMD_HELP; }
     return CMD_UNKNOWN;
 }
@@ -63,6 +67,8 @@ pub fn print_usage() -> void {
     print_errln("  remove <name>        Remove a dependency");
     print_errln("  vendor               Download all dependencies");
     print_errln("  bench [--quick]      Run self-hosting benchmark");
+    print_errln("  init                 Initialize a project in the current directory");
+    print_errln("  update               Pull latest idot and rebuild the compiler");
     print_errln("");
     print_errln("Compiler flags:");
     print_errln("  --emit-c             Emit C source without compiling");

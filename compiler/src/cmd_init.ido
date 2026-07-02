@@ -1,0 +1,45 @@
+import "std";
+import "util";
+import "manifest";
+
+fn get_cwd_name() -> string {
+    let tmp: string = ".idot_cwd_tmp";
+    if is_windows() != 0 {
+        let cmd: string = "cmd /c \"for %I in (.) do echo %~nxI\" > .idot_cwd_tmp";
+        system(cmd.ptr);
+    } else {
+        let cmd: string = "basename \"$(pwd)\" > .idot_cwd_tmp";
+        system(cmd.ptr);
+    }
+    let content = read_entire_file(tmp);
+    delete_file(tmp);
+    while content.len > 0 && (content.ptr[content.len - 1] == 10 || content.ptr[content.len - 1] == 13) {
+        content.len = content.len - 1;
+    }
+    if content.len == 0 {
+        return "my-project";
+    }
+    return content;
+}
+
+pub fn cmd_init() -> i32 {
+    if file_exists("matrix.toml") != 0 {
+        print_errln("Error: matrix.toml already exists in current directory");
+        return 1;
+    }
+
+    if create_dir("src") != 0 {
+        print_errln("Error: could not create src directory");
+        return 1;
+    }
+
+    let name = get_cwd_name();
+    let manifest = manifest_template(name);
+    write_str_to_file("matrix.toml", manifest);
+
+    let main_src: string = "fn main() -> i32 {\n    return 0;\n}\n";
+    write_str_to_file("src/main.ido", main_src);
+
+    print_errln("Initialized project in current directory");
+    return 0;
+}

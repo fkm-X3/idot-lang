@@ -1,0 +1,30 @@
+import "std";
+import "util";
+
+pub fn cmd_update() -> i32 {
+    if file_exists("compiler/src/main.ido") == 0 {
+        if file_exists("../compiler/src/main.ido") == 0 {
+            print_errln("Error: must be run from the idot-lang repository root");
+            return 1;
+        }
+    }
+
+    print_errln("Pulling latest idot...");
+    let pull_cmd: string = "git pull";
+    let rc = system(pull_cmd.ptr);
+    if rc != 0 {
+        print_errln("Error: git pull failed");
+        return 1;
+    }
+
+    print_errln("Rebuilding compiler...");
+    let build_cmd: string = "cargo run --bin idot -- compile compiler/src/main.ido";
+    let rc2 = system(build_cmd.ptr);
+    if rc2 != 0 {
+        print_errln("Error: compiler rebuild failed");
+        return 1;
+    }
+
+    print_errln("Idot updated successfully");
+    return 0;
+}
