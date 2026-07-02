@@ -489,7 +489,6 @@ impl CBackend {
         // Skip constants already defined as macros by the included system
         // headers (<fcntl.h>, <stdio.h>, <unistd.h>).
         const SYS_CONSTS: &[&str] = &[
-            "STDIN_FILENO", "STDOUT_FILENO", "STDERR_FILENO",
             "O_RDONLY", "O_WRONLY", "O_RDWR",
             "O_CREAT", "O_TRUNC", "O_APPEND",
             "SEEK_SET", "SEEK_CUR", "SEEK_END",
@@ -497,9 +496,22 @@ impl CBackend {
         if SYS_CONSTS.contains(&c.name.as_str()) {
             return;
         }
+        // Constants from <unistd.h> (POSIX) which aren't available on MSVC.
+        // Emit them guarded by #ifndef so they work on both platforms.
+        const POSIX_FD_CONSTS: &[&str] = &[
+            "STDIN_FILENO", "STDOUT_FILENO", "STDERR_FILENO",
+        ];
+        if POSIX_FD_CONSTS.contains(&c.name.as_str()) {
+            self.emit_global_const_guarded(c);
+            return;
+        }
         if let Some(tv) = &c.resolved_type {
             self.var_types.insert(c.name.clone(), tv.clone());
         }
+        self.emit_global_const_body(c);
+    }
+
+    fn emit_global_const_body(&mut self, c: &ConstDecl) {
         self.output.push_str("const ");
         if let Some(tv) = &c.resolved_type {
             self.emit_type_val(tv);
@@ -513,6 +525,17 @@ impl CBackend {
         self.output.push_str(" = ");
         self.emit_expr(&c.init);
         self.emit_line(";");
+    }
+
+    fn emit_global_const_guarded(&mut self, c: &ConstDecl) {
+        if let Some(tv) = &c.resolved_type {
+            self.var_types.insert(c.name.clone(), tv.clone());
+        }
+        self.output.push_str("#ifndef ");
+        self.output.push_str(&c.name);
+        self.output.push('\n');
+        self.emit_global_const_body(c);
+        self.output.push_str("#endif\n");
     }
 
     // === Statements ===
