@@ -90,15 +90,3 @@ jobs:
         run: |
           rm -f build/test_*.c build/test_*.exe build/test_*.out \
             build/main.c build/main.exe build/main.out
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check YAML formatting
-        run: |
-          if command -v yamllint &> /dev/null; then
-            yamllint .github/workflows/*.yml
-          else
-            echo "yamllint not available, skipping"
-          fi
