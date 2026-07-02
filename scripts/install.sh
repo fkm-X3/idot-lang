@@ -73,7 +73,8 @@ install_binaries() {
     else
         tar xzf idot-archive
     fi
-    cp idot matrix "$BIN_DIR/" 2>/dev/null || true
+    find "$tmp" -name 'idot' -type f -exec cp {} "$BIN_DIR/" \; 2>/dev/null || true
+    find "$tmp" -name 'matrix' -type f -exec cp {} "$BIN_DIR/" \; 2>/dev/null || true
     popd &>/dev/null
 
     chmod +x "$BIN_DIR/idot" "$BIN_DIR/matrix" 2>/dev/null || true

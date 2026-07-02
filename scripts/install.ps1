@@ -55,14 +55,14 @@ function Install-Binaries {
         tar xzf $archive -C $tmp
     }
 
-    $idotPath = Join-Path $BinDir 'idot.exe'
-    $matrixPath = Join-Path $BinDir 'matrix.exe'
+    $idotSrc = Get-ChildItem -Path $tmp -Recurse -Filter 'idot.exe' | Select-Object -First 1
+    $matrixSrc = Get-ChildItem -Path $tmp -Recurse -Filter 'matrix.exe' | Select-Object -First 1
 
-    if (Test-Path (Join-Path $tmp 'idot.exe')) {
-        Copy-Item (Join-Path $tmp 'idot.exe') $idotPath -Force
+    if ($idotSrc) {
+        Copy-Item $idotSrc.FullName (Join-Path $BinDir 'idot.exe') -Force
     }
-    if (Test-Path (Join-Path $tmp 'matrix.exe')) {
-        Copy-Item (Join-Path $tmp 'matrix.exe') $matrixPath -Force
+    if ($matrixSrc) {
+        Copy-Item $matrixSrc.FullName (Join-Path $BinDir 'matrix.exe') -Force
     }
 
     Remove-Item -Path $tmp -Recurse -Force
